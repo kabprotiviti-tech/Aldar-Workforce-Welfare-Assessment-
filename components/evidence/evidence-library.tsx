@@ -19,7 +19,9 @@ import { Pill, type PillTone } from "@/components/ds/pill";
 import { EmptyState } from "@/components/ds/empty-state";
 import { Button } from "@/components/ds/button";
 import { ProgressBar } from "@/components/ds/progress-bar";
-import { EvidencePreview } from "@/components/evidence/evidence-preview";
+import { EvidencePreview, type PreviewFocus } from "@/components/evidence/evidence-preview";
+import { FactLedger } from "@/components/facts/fact-ledger";
+import { parsePageRef, type LedgerFact } from "@/lib/facts/ledger";
 
 export interface EvidenceFileData {
   id: string;
@@ -59,6 +61,8 @@ export interface EvidenceLibraryProps {
   files: EvidenceFileData[];
   links: LinkData[];
   extractions: ExtractionSummaryData[];
+  /** Every extracted fact for this assessment's files, proposed ones included — the ledger is the one surface that shows unreviewed values. */
+  facts: LedgerFact[];
 }
 
 interface BatchProgressState {
@@ -143,16 +147,31 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-export function EvidenceLibrary({ assessmentId, subjectCode, entityName, requirements, files, links, extractions }: EvidenceLibraryProps) {
+export function EvidenceLibrary({ assessmentId, subjectCode, entityName, requirements, files, links, extractions, facts }: EvidenceLibraryProps) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(files[0]?.id ?? null);
   const [uploading, setUploading] = useState(false);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [focusedFact, setFocusedFact] = useState<LedgerFact | null>(null);
   const { batch, extracting, startError, start } = useExtractionBatch(assessmentId, () => router.refresh());
 
   const selectedFile = files.find((f) => f.id === selectedId) ?? null;
   const linkedRequirementIds = new Set(links.filter((l) => l.evidenceFileId === selectedId).map((l) => l.requirementId));
   const extractionByFile = new Map(extractions.map((e) => [e.evidenceFileId, e]));
+
+  const factsByFile = new Map<string, LedgerFact[]>();
+  for (const fact of facts) {
+    const existing = factsByFile.get(fact.evidenceFileId);
+    if (existing) existing.push(fact);
+    else factsByFile.set(fact.evidenceFileId, [fact]);
+  }
+
+  // Clicking a fact moves the document beside it: its page, and its
+  // region when a bounding box exists (this prompt).
+  const previewFocus: PreviewFocus | null =
+    focusedFact && focusedFact.evidenceFileId === selectedId
+      ? { page: parsePageRef(focusedFact.pageRef), bbox: focusedFact.bbox }
+      : null;
 
   async function handleFiles(fileList: FileList) {
     setUploadErrors([]);
@@ -238,6 +257,10 @@ export function EvidenceLibrary({ assessmentId, subjectCode, entityName, require
                 extracting={extracting}
                 startError={startError}
                 onExtract={start}
+                factsByFile={factsByFile}
+                previewFocus={previewFocus}
+                focusedFactId={focusedFact?.id ?? null}
+                onFocusFact={setFocusedFact}
               />
             ),
           },
@@ -269,6 +292,10 @@ function ThreePanelLibrary({
   extracting,
   startError,
   onExtract,
+  factsByFile,
+  previewFocus,
+  focusedFactId,
+  onFocusFact,
 }: {
   assessmentId: string;
   files: EvidenceFileData[];
@@ -286,6 +313,10 @@ function ThreePanelLibrary({
   extracting: boolean;
   startError: string | null;
   onExtract: (evidenceFileIds: string[]) => void;
+  factsByFile: Map<string, LedgerFact[]>;
+  previewFocus: PreviewFocus | null;
+  focusedFactId: string | null;
+  onFocusFact: (fact: LedgerFact) => void;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_1fr_260px]">
@@ -374,7 +405,10 @@ function ThreePanelLibrary({
       </div>
 
       <div>
-        <EvidencePreview file={selectedFile ? { storagePath: selectedFile.storagePath, originalName: selectedFile.originalName, mimeType: selectedFile.mimeType } : null} />
+        <EvidencePreview
+          file={selectedFile ? { storagePath: selectedFile.storagePath, originalName: selectedFile.originalName, mimeType: selectedFile.mimeType } : null}
+          focus={previewFocus}
+        />
 
         {selectedFile && (
           <div className="mt-4 flex items-center justify-between gap-3 rounded-ds-control border border-ds-line bg-ds-surface-2 px-3 py-2.5">
@@ -478,8 +512,16 @@ function ThreePanelLibrary({
         )}
       </div>
 
-      <div className="rounded-ds-card border border-dashed border-ds-line bg-ds-surface-2 p-4">
-        <EmptyState title="Observations" description="Reserved for a future prompt." />
+      {/* The fact ledger sits beside the preview on purpose: clicking a
+          fact has to move the document next to it (this prompt). */}
+      <div className="rounded-ds-card border border-ds-line bg-ds-surface-2 p-3">
+        <FactLedger
+          assessmentId={assessmentId}
+          facts={selectedFile ? (factsByFile.get(selectedFile.id) ?? []) : []}
+          focusedFactId={focusedFactId}
+          onFocusFact={onFocusFact}
+          onResolved={() => router.refresh()}
+        />
       </div>
     </div>
   );

@@ -93,6 +93,22 @@ export type FactConfidence = z.infer<typeof factConfidenceSchema>;
 export const factAbsenceReasonSchema = z.enum(["not_present", "illegible"]);
 export type FactAbsenceReason = z.infer<typeof factAbsenceReasonSchema>;
 
+/**
+ * 0021_fact_ledger.sql — optional region of a page a fact was read from,
+ * in normalized 0-1 coordinates so it renders correctly at any zoom or
+ * container size. Nullable: the v1 extraction prompts don't ask the model
+ * for coordinates (see docs/decisions.md), so this is the shape a future
+ * coordinate source has to produce, not something present today.
+ */
+export const factBboxSchema = z.object({
+  page: z.number().int().positive(),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().min(0).max(1),
+  height: z.number().min(0).max(1),
+});
+export type FactBbox = z.infer<typeof factBboxSchema>;
+
 export const extractedFactRowSchema = z.object({
   id: uuidSchema,
   extraction_id: uuidSchema,
@@ -113,11 +129,41 @@ export const extractedFactRowSchema = z.object({
   status: extractedFactStatusSchema,
   resolved_by: uuidSchema.nullable(),
   resolved_at: timestampSchema.nullable(),
+  /** 0021_fact_ledger.sql — an edited fact's human value, as {"value": <json>}. The model's own value_* columns are left intact as provenance. */
   resolved_value_json: z.unknown().nullable(),
+  /** 0021_fact_ledger.sql — why an assessor rejected this fact. Distinct from `reason`, which is the model explaining an absence. */
+  rejection_reason: z.string().nullable(),
+  bbox: z.unknown().nullable(),
   created_at: timestampSchema,
   updated_at: timestampSchema,
 });
 export type ExtractedFactRow = z.infer<typeof extractedFactRowSchema>;
+
+/**
+ * 0021_fact_ledger.sql — the only read path for facts anything downstream
+ * consumes. Note what's absent: the raw value_text/value_number/... columns.
+ * `confirmed_value` is already the authoritative value (an edited fact's
+ * human value, otherwise the accepted model value), so no consumer can
+ * accidentally read a superseded proposal.
+ */
+export const factLedgerConfirmedRowSchema = z.object({
+  id: uuidSchema,
+  extraction_id: uuidSchema,
+  evidence_file_id: uuidSchema,
+  assessment_id: uuidSchema,
+  fact_key: z.string(),
+  confirmed_value: z.unknown().nullable(),
+  unit: z.string().nullable(),
+  page_ref: z.string().nullable(),
+  verbatim_quote: z.string().nullable(),
+  confidence: factConfidenceSchema.nullable(),
+  status: z.enum(["accepted", "edited"]),
+  resolved_by: uuidSchema.nullable(),
+  resolved_at: timestampSchema.nullable(),
+  created_at: timestampSchema,
+  updated_at: timestampSchema,
+});
+export type FactLedgerConfirmedRow = z.infer<typeof factLedgerConfirmedRowSchema>;
 
 export const aiObservationKindSchema = z.enum(["evidence_identified", "potential_gap", "requires_attention"]);
 export type AiObservationKind = z.infer<typeof aiObservationKindSchema>;

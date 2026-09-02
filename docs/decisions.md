@@ -991,3 +991,132 @@ handlers, queue, and extraction orchestration are proven instead by the
 DB-backed queue test (`tests/db/extraction-queue.test.ts`, real Postgres,
 real `claim_next_extraction_job` SQL function) and the mocked
 `extract.test.ts`/`queue.test.ts` suites.
+
+## Fact ledger
+
+`lib/facts/`, `components/facts/fact-ledger.tsx`,
+`supabase/migrations/0021_fact_ledger.sql`. The human gate between
+extraction and everything downstream (this prompt). CONTEXT.md rule 4
+already said nothing reaches a report without a person confirming it;
+this phase is what makes that structurally true instead of a convention
+every future query has to remember.
+
+**The guarantee is a view that withholds columns, not just a WHERE
+clause.** `fact_ledger_confirmed` filters to `accepted`/`edited`, and it
+also refuses to expose the raw `value_text`/`value_number`/... columns or
+`resolved_value_json`. That second part is the one that matters: a view
+that filtered rows but re-exposed the model's original value columns
+would still let a consumer read the *superseded* proposal of an edited
+fact, or re-implement the "edited wins" precedence and get it wrong. One
+`confirmed_value` column, already resolved, is the only value there is to
+read. `security_invoker = true` because Postgres's default for views is
+owner rights, which would have quietly bypassed the staff-only RLS on
+`extracted_facts`/`evidence_files` underneath.
+
+**"The only read path" is enforced by a test that walks the filesystem,
+with a two-file allowlist.** `tests/read-path.test.ts` fails if any module
+under `app/`, `components/`, `lib/` or `scripts/` queries
+`extracted_facts`, except `lib/ai/extract-supabase.ts` (which writes the
+rows) and `lib/facts/ledger-supabase.ts` (the ledger itself — showing a
+person unreviewed facts is precisely its job). It walks the filesystem
+rather than `git ls-files` because a file that hasn't been committed yet
+is exactly the one most likely to have just introduced a second read
+path. The guard was verified by temporarily adding a violating query and
+confirming the test failed on it. This is also why the evidence page's
+per-file fact count moved out of an inline query and into
+`listFactsForEvidenceFiles` — one read owner, no exceptions.
+
+**Resolution and its audit row are one database transaction, so the port
+has no "write audit" method to forget.** "Every accept/edit/reject writes
+to audit_log" can't be guaranteed by a Supabase client that updates
+`extracted_facts` and then inserts into `audit_log`: PostgREST has no
+cross-table transaction, so there is a window where the status changed
+and the log entry didn't. `resolve_extracted_fact` does both in one call
+(0021_fact_ledger.sql), which is why `FactLedgerDb`
+(`lib/facts/resolve.ts`) exposes only `getFacts` and `resolveFact` — no
+implementation of that interface, and no caller of it, can change a
+fact's status without recording who did it. The before/after snapshots
+are `to_jsonb(row)` taken inside the function rather than anything the
+caller supplies, so the trail reflects the row's real state.
+
+**The function checks `is_staff()` itself and is granted to
+`authenticated`, not `service_role`.** A `security definer` function
+bypasses the RLS that would otherwise be doing the authorization, so
+granting it broadly without an internal check would have let a
+`client_viewer` accept facts — a privilege escalation straight through
+the human gate this phase exists to build. Granting it to
+`authenticated` (rather than running it as a service role) also means
+`auth.uid()` inside the function is the actual assessor, so `resolved_by`
+and the audit actor are the real person. Both properties are tested
+against real Postgres, including the negative case
+(`tests/db/fact-ledger.test.ts`).
+
+**Bulk accept re-checks confidence server-side and resolves each fact
+individually.** "Bulk accept only for facts with high confidence... and it
+must still record an individual action row per fact" (this prompt) has
+two failure modes, and neither is prevented by UI alone: a request could
+carry ids the client believed were high confidence, and a batch UPDATE
+would produce one audit row for the lot. `bulkAcceptHighConfidence`
+re-reads every id from the database, applies `isBulkAcceptable` to the
+stored row, and then calls the single-fact path once per fact. Tested
+both ways — the client-lied case, and the one-audit-row-per-fact count.
+
+**An edit stores the human value in `resolved_value_json` rather than
+overwriting the model's `value_*` columns.** The verbatim quote and page
+reference are only meaningful next to what the model actually proposed;
+overwriting the proposal would leave a quote that no longer matches the
+value beside it, and would destroy the before-state the audit trail
+needs. The review list shows both ("Model proposed: 42") for an edited
+fact.
+
+**An edited value is coerced to the proposed value's type.** An edit
+arrives from a text input as a string, but the rule engine will later
+compare these values numerically or as dates. `coerceEditedValue`
+(`lib/facts/ledger.ts`) parses the human's text against the type the
+model proposed, so editing a count from 42 to 43 stores the number 43,
+not the string `"43"` — a type drift that would have silently broken
+downstream comparisons. It also refuses an empty edit: an assessor who
+believes there is no value should reject the fact with a reason, because
+a null "confirmed" value would be consumed downstream as a real,
+human-confirmed absence.
+
+**Bounding boxes: the column and the UI path exist, but the v1 prompts
+don't ask the model for coordinates.** This prompt says "highlights the
+region **if a bounding box is available**". Asking a model to invent pixel
+geometry for a scanned page produces confident nonsense — plausible
+numbers pointing at the wrong place, which is worse than no highlight at
+all, because a highlight is a claim about provenance. So `bbox` is
+nullable, validated at the boundary with `factBboxSchema` (a malformed
+box is dropped rather than rendered), and the image preview draws the
+overlay when a box is genuinely present. A real coordinate source (an OCR
+pass, a future tool-use response) can fill it with no schema change.
+
+**Clicking a fact navigates a PDF to its page; it cannot highlight a
+region inside one.** The PDF preview is the browser's own viewer in an
+iframe (chosen in the evidence-handling phase so a 40MB scan doesn't
+freeze the tab), and nothing can draw over its internal rendering.
+`#page=N` — the standard PDF open parameter every native viewer honours —
+is therefore what "scrolls the preview to that page" means for a PDF, and
+a bounding box on a PDF narrows to its page while the verbatim quote in
+the ledger does the rest. Region highlighting is real for images, where
+the app renders the `<img>` itself. The page number is part of the
+iframe's React `key` because a hash-only `src` change doesn't reliably
+re-navigate an already-loaded iframe across browsers.
+
+**Page references are parsed, not assumed.** `page_ref` is free text the
+model wrote, so `parsePageRef` reads the shapes that actually occur
+("page 1", "p. 3", "Page 5 of 40", a bare "7") and prefers a number
+introduced by "page"/"p"/"pg" over a leading number belonging to
+something else — "Table 3, page 5" is page 5, not page 3.
+
+**"14 of 22 facts confirmed" counts accepted + edited, and rejected is
+shown separately.** Taking this prompt's wording literally, a rejected
+fact is a decision but not a confirmation, so it doesn't advance the
+count. To keep that from reading as unfinished work forever, the ledger
+also shows "N to review" and "N rejected" beside the required label
+rather than changing it.
+
+**A fact with an unrecognised status is treated as unreviewed.** If a
+future migration adds a status this build doesn't know,
+`ledgerFactFromRow` maps it to `proposed` rather than assuming it's
+confirmed. The safe direction for a gate is to under-trust.

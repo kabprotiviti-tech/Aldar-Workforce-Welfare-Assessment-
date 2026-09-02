@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { listFactsForEvidenceFiles } from "@/lib/facts/ledger-supabase";
 import { EvidenceLibrary } from "@/components/evidence/evidence-library";
 
 function oneOf<T>(value: T | T[] | null): T | null {
@@ -39,16 +40,19 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
   ]);
 
   const fileIds = (files ?? []).map((f) => f.id);
-  const [{ data: links }, { data: extractions }, { data: facts }] = await Promise.all([
+  // Facts come from lib/facts/ledger-supabase.ts rather than a query
+  // here: along with the extraction writer, that module is the only place
+  // allowed to read extracted_facts directly, so that everything
+  // downstream has to go through the fact_ledger_confirmed view and
+  // physically cannot see a 'proposed' value (tests/read-path.test.ts).
+  const [{ data: links }, { data: extractions }, facts] = await Promise.all([
     fileIds.length > 0
       ? supabase.from("evidence_file_requirements").select("evidence_file_id, requirement_id").in("evidence_file_id", fileIds)
       : Promise.resolve({ data: [] as { evidence_file_id: string; requirement_id: string }[] }),
     fileIds.length > 0
       ? supabase.from("extractions").select("evidence_file_id, cost_usd, error, created_at").in("evidence_file_id", fileIds).order("created_at", { ascending: false })
       : Promise.resolve({ data: [] as { evidence_file_id: string; cost_usd: number | null; error: string | null; created_at: string }[] }),
-    fileIds.length > 0
-      ? supabase.from("extracted_facts").select("evidence_file_id").in("evidence_file_id", fileIds)
-      : Promise.resolve({ data: [] as { evidence_file_id: string }[] }),
+    listFactsForEvidenceFiles(supabase, fileIds),
   ]);
 
   // extractions is ordered newest-first, so the first row seen per file is its latest attempt.
@@ -59,8 +63,8 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
     }
   }
   const factCountByFile = new Map<string, number>();
-  for (const f of facts ?? []) {
-    factCountByFile.set(f.evidence_file_id, (factCountByFile.get(f.evidence_file_id) ?? 0) + 1);
+  for (const fact of facts) {
+    factCountByFile.set(fact.evidenceFileId, (factCountByFile.get(fact.evidenceFileId) ?? 0) + 1);
   }
 
   return (
@@ -86,6 +90,7 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
         error: latestExtractionByFile.get(fileId)?.error ?? null,
         factCount: factCountByFile.get(fileId) ?? 0,
       }))}
+      facts={facts}
     />
   );
 }

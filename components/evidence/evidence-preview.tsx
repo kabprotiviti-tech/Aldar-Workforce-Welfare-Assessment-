@@ -11,6 +11,12 @@ export interface PreviewFile {
   mimeType: string;
 }
 
+/** Normalized 0-1 region of a page to highlight — lib/db/evidence.ts's factBboxSchema. */
+export interface PreviewFocus {
+  page: number | null;
+  bbox: { page: number; x: number; y: number; width: number; height: number } | null;
+}
+
 type Kind = "pdf" | "image" | "spreadsheet" | "other";
 
 function kindOf(originalName: string, mimeType: string): Kind {
@@ -24,7 +30,7 @@ function kindOf(originalName: string, mimeType: string): Kind {
 /** Cap on rendered spreadsheet rows — same freeze-avoidance reasoning as the native PDF viewer below, for a pathologically large sheet. */
 const SPREADSHEET_ROW_LIMIT = 500;
 
-export function EvidencePreview({ file }: { file: PreviewFile | null }) {
+export function EvidencePreview({ file, focus = null }: { file: PreviewFile | null; focus?: PreviewFocus | null }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<unknown[][] | null>(null);
@@ -90,21 +96,58 @@ export function EvidencePreview({ file }: { file: PreviewFile | null }) {
   if (kind === "pdf") {
     // The browser's own PDF viewer handles pagination and lazy page
     // rendering natively — this is what keeps a 40MB scanned PDF from
-    // freezing the tab (this prompt's acceptance criterion): the native
-    // viewer streams and paginates itself, rather than this app rendering
-    // every page into the DOM up front with a custom canvas-based viewer.
-    // See docs/decisions.md.
+    // freezing the tab (the evidence-handling prompt's acceptance
+    // criterion): the native viewer streams and paginates itself, rather
+    // than this app rendering every page into the DOM up front with a
+    // custom canvas-based viewer. See docs/decisions.md.
+    //
+    // "#page=N" is the standard PDF open-parameter every native viewer
+    // honours, and is how clicking a fact scrolls the preview to that
+    // page (this prompt). It's in the `key` as well as the src because a
+    // hash-only src change doesn't reliably re-navigate an already-loaded
+    // iframe across browsers; remounting does, and the re-request is
+    // served from the browser's cache. A region highlight is not possible
+    // inside the native viewer — nothing can draw over its internal
+    // rendering — so for PDFs a bounding box narrows to its page and the
+    // quote in the ledger does the rest. See docs/decisions.md.
+    const page = focus?.bbox?.page ?? focus?.page ?? null;
+    const src = page ? `${url}#page=${page}` : url;
     return (
-      <iframe src={url} title={file.originalName} className="h-full min-h-[70vh] w-full rounded-ds-control border border-ds-line" />
+      <iframe
+        key={`${file.storagePath}#${page ?? "start"}`}
+        src={src}
+        title={file.originalName}
+        className="h-full min-h-[70vh] w-full rounded-ds-control border border-ds-line"
+      />
     );
   }
 
   if (kind === "image") {
-    // A signed Supabase Storage URL is a per-deployment, dynamic external
-    // host next/image's static remotePatterns config can't name in
-    // advance — a plain <img> is the standard, correct choice here.
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt={file.originalName} className="max-h-[70vh] w-full rounded-ds-control border border-ds-line object-contain" />;
+    const bbox = focus?.bbox ?? null;
+    return (
+      <div className="relative w-full">
+        {/* A signed Supabase Storage URL is a per-deployment, dynamic
+            external host next/image's static remotePatterns config can't
+            name in advance — a plain <img> is the standard, correct
+            choice here. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={file.originalName} className="max-h-[70vh] w-full rounded-ds-control border border-ds-line object-contain" />
+        {bbox && (
+          // Normalized 0-1 coordinates, so the highlight lands correctly
+          // whatever size the container renders at.
+          <div
+            aria-hidden
+            className="pointer-events-none absolute rounded-sm border-2 border-ds-accent bg-ds-accent-soft/40"
+            style={{
+              left: `${bbox.x * 100}%`,
+              top: `${bbox.y * 100}%`,
+              width: `${bbox.width * 100}%`,
+              height: `${bbox.height * 100}%`,
+            }}
+          />
+        )}
+      </div>
+    );
   }
 
   if (kind === "spreadsheet") {

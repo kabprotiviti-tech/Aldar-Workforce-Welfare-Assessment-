@@ -237,6 +237,41 @@ those four don't cover (list-valued facts like
 `reason` set) is populated per row; which one is a pure function of the
 model's returned value type (`factToInsert`, `lib/ai/extract.ts`).
 
+`0021_fact_ledger.sql` adds `rejection_reason` (an assessor's reason for
+refusing a fact — distinct from `reason`, which is the *model* explaining
+an absence) and `bbox` (an optional normalized 0-1 region of the page the
+fact was read from, so the preview can highlight it; null today because
+the v1 prompts don't ask the model for coordinates — see
+docs/decisions.md). An edited fact keeps the model's `value_*` columns
+untouched as provenance and stores the human's value in
+`resolved_value_json` as `{"value": ...}`.
+
+### fact_ledger_confirmed (view)
+`0021_fact_ledger.sql`. **The only read path for facts.** Nothing
+downstream — rules, findings, reports, dashboards — reads
+`extracted_facts` directly; a test enforces that
+(`tests/read-path.test.ts`), and the view makes the mistake impossible
+rather than merely discouraged:
+
+- It returns only `accepted` and `edited` rows, so a `proposed` value
+  (never reviewed) or a `rejected` one (actively refused) is invisible.
+- It exposes a single `confirmed_value` (jsonb) — an edited fact's human
+  value, otherwise the accepted model value — and deliberately **omits**
+  the raw `value_*` and `resolved_value_json` columns, so no consumer can
+  read a superseded proposal by mistake or re-implement that precedence
+  incorrectly.
+- `security_invoker = true`, so it's subject to the caller's own RLS
+  rather than the view owner's (Postgres's default for views would
+  silently bypass the staff-only policies on the underlying tables).
+
+`resolve_extracted_fact(fact_id, status, resolved_value, rejection_reason)`
+is the matching write path: one `security definer` function that applies
+the resolution **and** appends its `audit_log` row in a single
+transaction, so a status change without an audit entry isn't reachable.
+It checks `is_staff()` itself and is granted to `authenticated` so
+`auth.uid()` is the real assessor (recorded as both `resolved_by` and the
+audit actor).
+
 ### ai_observations
 Something the model flagged for a human to look at (a gap, something worth
 attention) — never a compliance status, always routed to
