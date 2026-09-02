@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ADMIN_DATABASE_URL, authenticatedDatabaseUrl, isReachable, resetAndMigrate } from "./helpers";
 
 /**
  * Proves, against a real Postgres instance, that public.audit_log is
@@ -13,26 +12,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * (see docs/decisions.md for how this was set up and verified). Skips
  * cleanly, rather than failing the whole suite, when none is reachable.
  */
-const ADMIN_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres_test_pw@127.0.0.1:5432/wwap_test";
-
-const AUTHENTICATED_DATABASE_URL = ADMIN_DATABASE_URL.replace(
-  /\/\/[^@]+@/,
-  "//authenticated:authenticated_test_pw@",
-);
-
 const adminPool = new Pool({ connectionString: ADMIN_DATABASE_URL });
-
-async function isReachable(): Promise<boolean> {
-  try {
-    await adminPool.query("select 1");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const reachable = await isReachable();
+const reachable = await isReachable(adminPool);
 
 if (!reachable) {
   // eslint-disable-next-line no-console
@@ -47,14 +28,7 @@ describe.skipIf(!reachable)("public.audit_log is append-only (Postgres RLS)", ()
   let rowId: string;
 
   beforeAll(async () => {
-    await adminPool.query(readFileSync(join(process.cwd(), "tests/db/local-setup.sql"), "utf8"));
-    await adminPool.query("drop schema if exists public cascade; create schema public;");
-    await adminPool.query(
-      "grant usage on schema public to anon, authenticated, service_role;",
-    );
-    await adminPool.query(
-      readFileSync(join(process.cwd(), "supabase/migrations/0001_init.sql"), "utf8"),
-    );
+    await resetAndMigrate(adminPool);
 
     const inserted = await adminPool.query<{ id: string }>(
       `insert into public.audit_log (actor_id, action, entity_type, entity_id, before, after)
@@ -63,7 +37,7 @@ describe.skipIf(!reachable)("public.audit_log is append-only (Postgres RLS)", ()
     );
     rowId = inserted.rows[0]!.id;
 
-    authenticatedPool = new Pool({ connectionString: AUTHENTICATED_DATABASE_URL });
+    authenticatedPool = new Pool({ connectionString: authenticatedDatabaseUrl() });
   });
 
   afterAll(async () => {

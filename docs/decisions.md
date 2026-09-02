@@ -249,3 +249,127 @@ success half — valid credentials landing on `/app` — needs a live
 Supabase project with a real user in it, which doesn't exist in this
 environment; provisioning one and running that path end-to-end is the
 first thing to do before treating this as fully verified.
+
+## 2026-09-02 — Full schema: 16 new tables, generated types, seed, RLS proof
+
+Built out the rest of the schema from CONTEXT.md's table list: core
+(organisations/entities/facilities/cycles), versioned templates,
+assessments, evidence/AI, rules/measurement, findings/reports — 16 new
+tables across `0002_core.sql` through `0008_grants.sql`, one Zod schema +
+TS type per table in `lib/db/` (`z.infer`, same pattern as `lib/rules/`),
+an idempotent seed script, and a real RLS test proving a client_viewer
+can't read another entity's findings.
+
+**Two gaps in the literal spec, closed and documented rather than
+silently patched.** `organisations` was listed under "Core (from prompt
+1)" but never actually existed — `0001_init.sql` left
+`users.organisation_id` with no FK target. And nothing in the schema said
+how a client_viewer's row maps to "their entity_id," which the RLS
+acceptance criterion requires — added `users.entity_id` (nullable, set
+only for client_viewer) as the direct link. Both closed in `0002_core.sql`
+with a comment at the point they're closed, not folded silently into
+column definitions.
+
+**The `authenticated` role had no table-level GRANT — RLS policies alone
+don't do anything.** Every table from `0002` through `0007` got RLS
+enabled and reasonable policies, and every one of them was completely
+unreachable, because a Postgres role needs a GRANT on the table before
+RLS is even consulted — a policy restricts rows on top of a grant, it
+doesn't create one. `audit_log` (`0001_init.sql`) was fine because it
+happened to grant all four verbs explicitly, specifically to prove the
+*policy* (not a missing grant) was what blocked update/delete. Nothing
+else had that. This surfaced as `tests/db/client-viewer-rls.test.ts`
+failing with "permission denied for table users" — a permission error,
+not an RLS-shaped empty result — while writing the very first test
+against a real `authenticated` connection. `0008_grants.sql` fixes it,
+granting exactly what each table's policies assume (SELECT wherever a
+select policy exists, INSERT/UPDATE wherever those policies exist, DELETE
+nowhere). Real Supabase projects may pre-configure default privileges
+that would have masked this in production — deliberately not relied on
+that: the migrations grant explicitly, so they're correct on any Postgres,
+including the local one this was tested against, not just a Supabase
+project configured a particular way.
+
+**Two vocabularies now named "module."** `lib/rules/constants.ts`'s
+`MODULES` (`EP`/`ONB`/`ACM`, used for report subject-code formatting) and
+the database's `module` columns (`employment_practices`/`onboarding`/
+`accommodation`, this prompt's literal spec) name the same three things
+differently, for different purposes, and nothing currently maps between
+them. Not reconciled here — flagged in `lib/db/common.ts` and left for
+whichever code first needs to move between the two (report generation,
+most likely).
+
+**Template/rule immutability is a convention, not a constraint.** CONTEXT.md
+and this prompt both say reports must stay reproducible against the
+template version they were assessed under, which means a
+`checklist_templates`/`requirements`/`questions` row shouldn't change once
+a template is `is_active` and assessments exist against it. Didn't add a
+trigger enforcing that (e.g. blocking UPDATE once `is_active = true`) —
+there's no "draft" state modeled for templates yet, so a real content
+workflow would need one before a freeze mechanism makes sense, and
+building both wasn't asked for. Documented instead, in `0003_templates.sql`
+and here, as a team-practice rule until a content-authoring flow exists to
+enforce it.
+
+**client_viewer's access is deliberately narrower than "everything about
+their entity."** CONTEXT.md says a client_viewer sees "approved reports and
+open findings for their own entities only" — not assessment content, not
+evidence, not AI extractions. Read that literally: `evidence_files`,
+`extractions`, `extracted_facts`, `ai_observations`, `rule_definitions`,
+`rule_evaluations`, `rooms`, `photos`, `checklist_templates`,
+`requirements`, `questions`, `cycles`, `organisations`, `entity_contacts`,
+and `finding_events` have no client_viewer policy at all — RLS's default
+with no matching policy is deny, so that's zero access, not an oversight.
+`entities`, `facilities`, and `assessments` get a narrow client_viewer
+policy anyway, only because a report/finding is unreadable without being
+able to resolve the entity/facility/assessment names it references.
+
+**"Open findings" reads as "not closed," not the literal status `open`.**
+`findings.status` is a five-stage lifecycle
+(open/in_progress/evidence_submitted/under_review/closed). CONTEXT.md's
+"open findings" predates that lifecycle and almost certainly means
+"outstanding," not literally `status = 'open'` — a client tracking their
+own remediation work needs to see `in_progress` and `evidence_submitted`
+items too. Implemented as `status <> 'closed'`.
+
+**`rooms.computed_m2_per_person` is a generated column.** Not a value any
+caller sets — CONTEXT.md rule 2 ("the model never performs arithmetic ...
+a typed rule engine evaluates") applies just as much to a human typing
+numbers into a form as it does to the model calling the Claude API.
+Verified against a real insert: 24m² / 6 occupants computed to exactly 4.
+
+**What's proven against a real Postgres, run in this session:** every
+migration applies cleanly from empty, twice in a row, with RLS enabled on
+all 24 tables (`\d+`-verified); the seed fixture's upsert-by-fixed-id
+pattern is idempotent (`tests/db/seed.idempotent.test.ts`, run twice,
+exact expected row counts both times); a client_viewer scoped to entity A
+sees entity A's finding, cannot read entity B's finding by id even when
+querying it directly, a second client_viewer scoped to entity B sees only
+entity B's, and admin sees both regardless of entity
+(`tests/db/client-viewer-rls.test.ts`).
+
+**What isn't proven, and why:** `scripts/seed.ts` itself creates its four
+auth users through the Supabase Admin API (`auth.admin.createUser`/
+`listUsers`), which needs a live Supabase project running GoTrue — this
+environment has a local Postgres, not a full Supabase stack (no Docker
+available to run one). What the test above actually proves is the part
+downstream of that API call and specific to this codebase: that upserting
+every `public.*` row by a fixed id is genuinely idempotent against the
+real migrations. The Admin API calls themselves are Supabase's own
+well-tested SDK surface, not new code written here, but running
+`scripts/seed.ts` itself end-to-end against a real project is still the
+first thing to do before treating it as fully verified — the same
+boundary noted for sign-in above.
+
+**Vitest needed a path-alias fix and forced-serial test files, unrelated to
+this schema but caught while building it.** `lib/db/*.ts` importing via
+`@/lib/rules/constants` (the same alias tsconfig defines) worked under
+`tsc` but failed at runtime under Vitest, which doesn't read tsconfig
+paths on its own — fixed with an explicit `resolve.alias` in
+`vitest.config.mts`. Separately, two `tests/db/*.test.ts` files each
+resetting the whole `public` schema in `beforeAll` raced each other when
+Vitest ran them in parallel (`duplicate key value violates unique
+constraint "pg_extension_name_index"`) — fixed with `fileParallelism:
+false`, cheap for a suite this size and the correct fix for tests sharing
+one physical external resource, rather than trying to isolate every DB
+test into its own throwaway database.

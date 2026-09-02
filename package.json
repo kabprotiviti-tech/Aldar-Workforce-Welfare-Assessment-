@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postbuild": "node scripts/check-client-bundle.mjs"
+    "postbuild": "node scripts/check-client-bundle.mjs",
+    "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.5",
@@ -30,6 +31,7 @@
     "pg": "8.23.0",
     "postcss": "8.5.26",
     "tailwindcss": "3.4.6",
+    "tsx": "4.23.13",
     "typescript": "5.5.3",
     "vitest": "4.1.11"
   }

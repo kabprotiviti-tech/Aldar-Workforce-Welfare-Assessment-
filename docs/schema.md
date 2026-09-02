@@ -1,49 +1,186 @@
 # Schema
 
-Source of truth is `supabase/migrations/`. This file is a scaffold — one section
-per table, kept short — updated in the same commit as any migration that adds,
-drops, or changes a table, per the convention in CONTEXT.md.
+Source of truth is `supabase/migrations/`, applied in filename order. This file
+is a scaffold — one section per table, kept short — updated in the same
+commit as any migration that adds, drops, or changes a table, per the
+convention in CONTEXT.md. Generated TypeScript types and Zod schemas for
+every table live in `lib/db/`, grouped into files matching the migration
+groups below.
 
-## public.users
+RLS is enabled on every table. Two role groups recur throughout:
+`is_staff()` (admin, assessor, qa_reviewer — full read across the supply
+chain) and `client_viewer`, whose access is narrow and explicit per table
+rather than blanket, matching CONTEXT.md's own description of that role:
+"sees approved reports and open findings for their own entities only."
+Helper functions (`current_user_role()`, `current_user_entity_id()`,
+`is_staff()`, `can_write_operational()`, `is_admin()`,
+`assessment_entity_id()`, `assessment_is_issued()`) are defined once in
+`0002_core.sql`/`0007_findings_reports.sql` and reused by policies in every
+migration after that. **A GRANT is not a policy** — `0008_grants.sql` gives
+`authenticated` the table-level privilege every policy below assumes; RLS
+restricts rows on top of a grant, it never creates one, and this migration
+exists because that distinction caused a real bug during development (see
+docs/decisions.md).
 
-Extends `auth.users` (Supabase-managed) with the profile fields the app needs.
+## Core
 
-| Column | Type | Notes |
-|---|---|---|
-| id | uuid, PK | = auth.users.id, cascades on delete |
-| full_name | text | not null |
-| role | text | not null; one of admin, assessor, qa_reviewer, client_viewer |
-| organisation_id | uuid | nullable — no organisations table yet |
-| active | boolean | not null, default true |
-| created_at | timestamptz | not null, default now() |
-| updated_at | timestamptz | not null, default now() |
+### organisations
+The consultancy's own tenant boundary for staff accounts — which
+organisation a user (`users.organisation_id`) belongs to. Not the assessed
+companies; those are `entities`.
 
-RLS: a user may `select` their own row (`auth.uid() = id`). No insert/update/delete
-policy exists yet — provisioning a new user's profile row is a manual/admin step
-until a signup or admin-provisioning flow is built.
+### users (0001_init.sql, extended in 0002_core.sql)
+Extends `auth.users` with `full_name`, `role`, `organisation_id`, `active`,
+and (added here) `entity_id` — the one addition this prompt's schema needed
+that wasn't in the original request: a client_viewer has to be scoped to
+*something*, and the brief's "own entity_id" phrasing implies a direct
+link, not a transitive one through an organisation. Null for every other
+role.
 
-## public.audit_log
+### entities
+The supply-chain companies actually being assessed — general contractors,
+facilities management companies, asset operators, subcontractors. The
+subject of every assessment, finding, and report.
 
-Append-only record of every write a human or the system makes. `before`/`after`
-are the row's state immediately either side of the change; `actor_id` is who (or
-what service) did it.
+### entity_contacts
+Who to reach at an entity (name, role, email, phone), with one contact
+flaggable as primary. Exists because assessments and evidence requests
+need a named recipient, not just a company name.
 
-| Column | Type | Notes |
-|---|---|---|
-| id | uuid, PK | default gen_random_uuid() |
-| actor_id | uuid | references auth.users, nullable (system-initiated writes) |
-| action | text | not null, e.g. "create", "update_status" |
-| entity_type | text | not null, e.g. "requirement_assessment" |
-| entity_id | text | not null |
-| before | jsonb | nullable |
-| after | jsonb | nullable |
-| created_at | timestamptz | not null, default now() |
+### facilities
+Physical sites belonging to an entity, inspected under the Accommodation
+module. Separate from `entities` because one entity (e.g. a facilities
+management company) can operate many facilities, each assessed on its own
+schedule against its own regulatory threshold (capacity-dependent, per
+CONTEXT.md).
 
-RLS: `authenticated` may `select` and `insert`. No `update` or `delete` policy
-exists for any role, so both are denied outright regardless of table-level
-grants — see docs/decisions.md for how that's proven and its one known limit
-(`service_role` bypasses RLS by Postgres/Supabase design; `writeAudit()` never
-calls update/delete, so that bypass is never exercised by this app).
+### cycles
+The yearly assessment period every assessment belongs to (e.g. "2026 Cycle
+1"). Exists so "this cycle's" vs. "last cycle's" comparisons — carry-forward
+requirements, recurrence detection — have something concrete to compare
+against.
 
-Write path: always `lib/audit.ts`'s `writeAudit()`, which uses the service-role
-client so the log outlives the actor's own session and RLS.
+## Templates
+Versioned checklists. A report has to stay reproducible against the exact
+template version it was assessed under (CONTEXT.md), so a template's
+content is meant to stay fixed once published — new content ships as a new
+version, never an edit to one already in use. That's a process convention
+documented here and enforced by team practice, not by a database
+constraint (see docs/decisions.md for why adding one felt disproportionate
+to what was asked).
+
+### checklist_templates
+One row per module per version (`employment_practices` / `onboarding` /
+`accommodation`), with `is_active` marking the current one.
+
+### requirements
+A template's numbered requirements. For Employment Practices/Onboarding
+these are literally "requirements"; for Accommodation, the same table
+holds its 12 assessment areas — one table, two names depending on module,
+rather than two near-identical tables.
+
+### questions
+The per-requirement questions an assessor answers during an office
+visit/document review, feeding `assessment_answers`.
+
+## Assessments
+One row per entity (or facility) per cycle per module, and its
+per-requirement/per-question content.
+
+### assessments
+The assessment record itself: which entity/facility, which cycle, which
+template version, its subject code (the report header's `Subject` field),
+what stage of the eight-stage lifecycle it's in, and the report-level
+figures (`risk_rating`, `overall_compliance_pct`,
+`adjusted_compliance_pct`) that `lib/rules/aggregate.ts` computes. A
+client_viewer sees a row here only once `issued_at` is set — a draft
+assessment is never visible to the client it's about.
+
+### assessment_items
+One row per requirement within one assessment — the compliance status,
+remark, and action required for closure that `lib/rules/validation.ts`
+checks. `carried_forward_from_item_id` links a requirement not reassessed
+this cycle back to the item it inherited its rating from.
+
+### assessment_answers
+One row per question within one assessment item, for the modules that
+work question-by-question (Employment Practices/Onboarding). Rolls up
+into its parent item's compliance status; a request the assessor confirms
+never touches this table without also touching the item above it.
+
+## Evidence and AI
+Staff-only throughout — CONTEXT.md scopes client_viewer to "reports and
+findings," not the working material behind them. `extractions` and
+`extracted_facts` and `ai_observations` are exactly "what CONTEXT.md rule
+2/3 says a model is allowed to produce": structured values and
+observations, never a status, never arithmetic.
+
+### evidence_files
+An uploaded document (payslip, contract, drawing, photo) tied to one
+assessment, with a review workflow (`review_status`) separate from
+whatever the model made of it.
+
+### extractions
+One run of the model against one evidence file — what it returned, which
+prompt version, token/cost accounting. Immutable once written: a
+correction doesn't edit an extraction, a human resolving a fact does
+(`extracted_facts.resolved_*`).
+
+### extracted_facts
+One proposed value from an extraction, and the human decision on it
+(`proposed` → `accepted`/`edited`/`rejected`). This is CONTEXT.md rule 4 as
+a table: nothing here reaches a report without `resolved_by`/`resolved_at`
+being set by a person.
+
+### ai_observations
+Something the model flagged for a human to look at (a gap, something worth
+attention) — never a compliance status, always routed to
+`confirmed`/`rejected`/`noted` by a person (`actioned_by`).
+
+## Rules and measurement
+
+### rule_definitions
+The rule engine's reference data: which requirement a rule checks, which
+extracted-fact keys it needs, its threshold, its legal basis. Content
+authored by admins, the same way templates are.
+
+### rule_evaluations
+One run of the rule engine against one assessment item — its inputs, its
+result (`pass`/`fail`/`insufficient_data`), and a human-readable
+explanation of how it got there. Append-only, like `extractions`: a
+re-evaluation is a new row.
+
+### rooms
+Room-level measurements for an accommodation facility.
+`computed_m2_per_person` is a **generated column** — the database computes
+it from `measured_area_m2` (or `drawing_area_m2`) and `occupancy_count`,
+the same way every time, because CONTEXT.md rule 2 ("the model never
+performs arithmetic ... a typed rule engine evaluates") applies just as
+much to a human typing numbers into a form as it does to a model.
+
+### photos
+Site photos tied to an assessment and (optionally) a specific
+requirement/area, with geolocation and an optional link to the extraction
+that analysed it (`analysis_id`).
+
+## Findings and reports
+The two things CONTEXT.md says a client_viewer may see.
+
+### findings
+An open item raised against one assessment item: priority, owner, due
+date, a five-stage status (`open` → `in_progress` → `evidence_submitted` →
+`under_review` → `closed`), and — for recurrence tracking —
+`repeat_of_finding_id`. A client_viewer sees findings for their own entity
+with `status <> 'closed'` ("open findings," read as "not yet closed" —
+see docs/decisions.md).
+
+### finding_events
+The internal history behind a finding (status changes, comments,
+escalations). Staff-only — this is the working trail, not the finding
+itself.
+
+### reports
+A generated report file for an assessment: version, format, storage path,
+and `is_current` marking which version is the live one. A client_viewer
+sees a report only when it's `is_current` and its assessment has been
+issued — "approved reports," not drafts or superseded versions.
