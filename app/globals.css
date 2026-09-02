@@ -2,6 +2,198 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Design tokens for WWAP — Direction B, "Field record".
+  Four themes (paper / slate / ink / high-contrast) change PALETTE ONLY.
+  Type scale, spacing, radii, shadow shape, and motion are defined once
+  below and never vary by theme — see docs/decisions.md for the rationale
+  and the verified contrast numbers behind every color value here.
+*/
+
+:root {
+  /* paper (default light) */
+  --bg: #f2f1ee;
+  --surface: #ffffff;
+  --ink: #1b1f23;
+  --ink-secondary: #565e64;
+  --hairline: #e0dfda;
+  --hairline-width: 1px;
+  --accent: #2f5d3a;
+  --accent-ink: #ffffff;
+  --compliant: #2f5d3a;
+  --partial: #8a6415;
+  --not-compliant: #9e3b33;
+  --not-applicable: #565e64;
+  --overlay: rgb(27 31 35 / 0.4);
+  --shadow-float: 0 10px 24px -8px rgb(27 31 35 / 0.22);
+
+  /* invariant across every theme */
+  --radius: 8px;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-24: 6rem;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-micro: 120ms;
+  --dur-structural: 200ms;
+  /* The one exception to the 120/200ms interface budget: the landing
+     page's single orchestrated hero moment (see docs/decisions.md). */
+  --dur-hero: 1600ms;
+
+  --font-sans: var(--font-plex-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-numeral: var(--font-plex-serif), Georgia, serif;
+}
+
+:root[data-theme="slate"] {
+  --bg: #e6e8e6;
+  --surface: #ffffff;
+  --ink: #1b1f23;
+  --ink-secondary: #565e64;
+  --hairline: #d3d6d2;
+  --accent: #2f5d3a;
+  --accent-ink: #ffffff;
+  --compliant: #2f5d3a;
+  --partial: #7a5710;
+  --not-compliant: #9e3b33;
+  --not-applicable: #565e64;
+  --overlay: rgb(27 31 35 / 0.4);
+  --shadow-float: 0 10px 24px -8px rgb(27 31 35 / 0.24);
+}
+
+:root[data-theme="ink"] {
+  --bg: #1c1f1c;
+  --surface: #242723;
+  --ink: #edebe6;
+  --ink-secondary: #a9ada6;
+  --hairline: #34372f;
+  --accent: #5b9c6f;
+  --accent-ink: #1c1f1c;
+  --compliant: #5b9c6f;
+  --partial: #d9a548;
+  --not-compliant: #e2695a;
+  --not-applicable: #a9ada6;
+  --overlay: rgb(0 0 0 / 0.55);
+  --shadow-float: 0 10px 24px -8px rgb(0 0 0 / 0.55);
+}
+
+:root[data-theme="high-contrast"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --ink: #000000;
+  --ink-secondary: #303030;
+  --hairline: #000000;
+  --hairline-width: 1.5px;
+  --accent: #1d4028;
+  --accent-ink: #ffffff;
+  --compliant: #1d4028;
+  --partial: #5c3d00;
+  --not-compliant: #7a2a22;
+  --not-applicable: #303030;
+  --overlay: rgb(0 0 0 / 0.7);
+  --shadow-float: 0 10px 24px -8px rgb(0 0 0 / 0.4);
+}
+
+* {
+  border-color: var(--hairline);
+}
+
+html {
+  color-scheme: light;
+}
+html[data-theme="ink"] {
+  color-scheme: dark;
+}
+
 body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
   font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
+/* Reserved exclusively for large display numerals — figures read as
+   measurements, not decoration. Never used for headings or body copy. */
+.numeral-display {
+  font-family: var(--font-numeral);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The single shadow level Direction B allows, and only for elements that
+   float above the page (drawers, menus, the command palette). Static
+   content — cards, tables, sections — never receives a shadow. */
+.shadow-float {
+  box-shadow: var(--shadow-float);
+}
+
+/* Landing page hero — the one animated moment in the whole product. */
+@keyframes trace-line {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes trace-dot {
+  from {
+    background: var(--surface);
+    border-color: var(--hairline);
+  }
+  to {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+@keyframes trace-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.hero-trace-line {
+  transform: scaleX(0);
+  transform-origin: left;
+  animation: trace-line var(--dur-hero) var(--ease) forwards;
+}
+.hero-trace-dot {
+  animation: trace-dot var(--dur-micro) var(--ease) forwards;
+}
+.hero-trace-detail {
+  opacity: 0;
+  animation: trace-fade var(--dur-micro) var(--ease) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
