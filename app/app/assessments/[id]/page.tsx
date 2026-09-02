@@ -1,11 +1,14 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { assignAssessmentOwner, recordActualVisitDate, updateVisitSchedule, uploadAccessLetter } from "@/lib/assessments/actions";
+import { issueRfiAction } from "@/lib/rfi/actions";
 import { Card } from "@/components/ds/card";
 import { Field } from "@/components/ds/field";
 import { Button } from "@/components/ds/button";
 import { Pill } from "@/components/ds/pill";
 import { Stat } from "@/components/ds/stat";
+import { EmptyState } from "@/components/ds/empty-state";
 import { StatusBanner } from "@/components/app/status-banner";
 
 export default async function AssessmentDetailPage({
@@ -36,6 +39,16 @@ export default async function AssessmentDetailPage({
 
   const entityName = (assessment.entities as { name: string } | null)?.name;
   const facilityName = (assessment.facilities as { name: string } | null)?.name;
+
+  const [{ data: contacts }, { data: rfiRequests }] = await Promise.all([
+    supabase.from("entity_contacts").select("id, name, email").eq("entity_id", assessment.entity_id).is("deleted_at", null),
+    supabase
+      .from("rfi_requests")
+      .select("id, status, due_date, issued_at, rfi_checklist_items(status)")
+      .eq("assessment_id", id)
+      .is("deleted_at", null)
+      .order("issued_at", { ascending: false }),
+  ]);
 
   return (
     <div className="grid gap-8">
@@ -130,6 +143,68 @@ export default async function AssessmentDetailPage({
           </Button>
         </form>
       </Card>
+
+      <div>
+        <p className="text-sm font-medium text-ds-ink">Requests for information</p>
+        <div className="mt-4 grid gap-6 lg:grid-cols-[2fr_1fr]">
+          {!rfiRequests || rfiRequests.length === 0 ? (
+            <EmptyState title="No RFIs issued yet" />
+          ) : (
+            <div className="grid gap-3">
+              {rfiRequests.map((rfi) => {
+                const items = (rfi.rfi_checklist_items ?? []) as { status: string }[];
+                const received = items.filter((item) => item.status === "received").length;
+                return (
+                  <Card key={rfi.id}>
+                    <div className="flex items-center justify-between">
+                      <Link href={`/app/evidence/${rfi.id}`} className="ds-focus-ring font-medium text-ds-accent-2 hover:underline">
+                        Issued {new Date(rfi.issued_at).toLocaleDateString()}
+                      </Link>
+                      <Pill tone={rfi.status === "completed" ? "ok" : "info"}>{rfi.status}</Pill>
+                    </div>
+                    <p className="mt-1 text-sm text-ds-ink-2">
+                      {received} of {items.length} received &middot; due {rfi.due_date}
+                    </p>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          <Card>
+            <p className="text-sm font-medium text-ds-ink">Issue an RFI</p>
+            {!contacts || contacts.length === 0 ? (
+              <p className="mt-3 text-sm text-ds-ink-2">This entity has no contacts on file yet.</p>
+            ) : (
+              <form action={issueRfiAction.bind(null, assessment.id)} className="mt-4 grid gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-ds-ink" htmlFor="contact_id">
+                    Send to
+                  </label>
+                  <select
+                    id="contact_id"
+                    name="contact_id"
+                    required
+                    className="ds-focus-ring mt-1.5 w-full rounded-ds-control border border-ds-line bg-ds-surface px-3 py-2 text-sm text-ds-ink"
+                  >
+                    {contacts.map((contact) => (
+                      <option key={contact.id} value={contact.id} disabled={!contact.email}>
+                        {contact.name} {contact.email ? `(${contact.email})` : "— no email"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-ds-ink-2">
+                  Generates a document checklist from this module&apos;s RFI templates, due 14 days from today.
+                </p>
+                <Button type="submit" variant="secondary" className="justify-self-start">
+                  Issue RFI
+                </Button>
+              </form>
+            )}
+          </Card>
+        </div>
+      </div>
 
       {assessment.permission_required && (
         <Card className="max-w-lg">

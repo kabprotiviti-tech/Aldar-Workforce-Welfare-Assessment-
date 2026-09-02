@@ -49,6 +49,10 @@ export const entityRowSchema = z.object({
   project_type: z.string().nullable(),
   status: entityStatusSchema,
   first_onboarded_at: timestampSchema.nullable(),
+  /** 0015_evidence_files_rfi_and_nda.sql — gates opening this entity's evidence until confirmed. */
+  nda_required: z.boolean(),
+  nda_confirmed_at: timestampSchema.nullable(),
+  nda_confirmed_by: uuidSchema.nullable(),
   created_at: timestampSchema,
   updated_at: timestampSchema,
   created_by: uuidSchema.nullable(),

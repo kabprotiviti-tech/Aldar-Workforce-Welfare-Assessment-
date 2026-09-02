@@ -4,17 +4,28 @@ import { dateSchema, timestampSchema, uuidSchema } from "@/lib/db/common";
 export const evidenceReviewStatusSchema = z.enum(["pending", "reviewed"]);
 export type EvidenceReviewStatus = z.infer<typeof evidenceReviewStatusSchema>;
 
+export const virusScanStatusSchema = z.enum(["pending", "clean", "infected", "error"]);
+export type VirusScanStatus = z.infer<typeof virusScanStatusSchema>;
+
 export const evidenceFileRowSchema = z.object({
   id: uuidSchema,
   assessment_id: uuidSchema,
+  /** 0015_evidence_files_rfi_and_nda.sql — the requirement this file evidences, when known. */
+  requirement_id: uuidSchema.nullable(),
+  /** The RFI checklist line this file was uploaded against, if any. */
+  rfi_checklist_item_id: uuidSchema.nullable(),
   storage_path: z.string(),
   original_name: z.string(),
   mime_type: z.string(),
   size_bytes: z.number().int(),
   document_class: z.string().nullable(),
-  uploaded_by: uuidSchema,
+  /** Exactly one of uploaded_by/uploaded_by_contact_id is set — see docs/decisions.md. */
+  uploaded_by: uuidSchema.nullable(),
+  uploaded_by_contact_id: uuidSchema.nullable(),
   uploaded_at: timestampSchema,
   review_status: evidenceReviewStatusSchema,
+  virus_scan_status: virusScanStatusSchema,
+  virus_scanned_at: timestampSchema.nullable(),
   updated_at: timestampSchema,
 });
 export type EvidenceFileRow = z.infer<typeof evidenceFileRowSchema>;

@@ -52,6 +52,12 @@ The supply-chain companies actually being assessed — general contractors,
 facilities management companies, asset operators, subcontractors. The
 subject of every assessment, finding, and report.
 
+`0015_evidence_files_rfi_and_nda.sql` adds `nda_required`/
+`nda_confirmed_at`/`nda_confirmed_by`: if set, staff must confirm a
+non-disclosure agreement is in place (once, for the entity — not
+per-viewer) before that entity's evidence can be opened
+(`components/app/nda-gate.tsx`).
+
 ### entity_contacts
 Who to reach at an entity (name, role, email, phone), with one contact
 flaggable as primary. Exists because assessments and evidence requests
@@ -170,6 +176,19 @@ An uploaded document (payslip, contract, drawing, photo) tied to one
 assessment, with a review workflow (`review_status`) separate from
 whatever the model made of it.
 
+`0015_evidence_files_rfi_and_nda.sql` adds `requirement_id` (which
+requirement this file evidences, when known) and `rfi_checklist_item_id`
+(which RFI checklist line it satisfies, when uploaded through the portal
+— `lib/rfi/portal.ts`). `uploaded_by` is now nullable and
+`uploaded_by_contact_id` added alongside it, exactly one of the two set:
+a staff upload still records `uploaded_by` (a Supabase user); an RFI
+portal upload has no Supabase session at all and records
+`uploaded_by_contact_id` (the RFI's own `entity_contacts` row) instead —
+never anything the uploader could self-report, since it's copied from the
+RFI request server-side. `virus_scan_status`/`virus_scanned_at` are the
+virus-scan hook's result (`lib/rfi/virus-scan.ts` — a stub today, swappable
+for a real scanner).
+
 ### extractions
 One run of the model against one evidence file — what it returned, which
 prompt version, token/cost accounting. Immutable once written: a
@@ -234,3 +253,49 @@ A generated report file for an assessment: version, format, storage path,
 and `is_current` marking which version is the live one. A client_viewer
 sees a report only when it's `is_current` and its assessment has been
 issued — "approved reports," not drafts or superseded versions.
+
+## Request for information (RFI)
+`0014_rfi.sql`. The tokenised-portal tables have no RLS policies at all —
+they're written and read exclusively by server code holding the
+service-role client (`lib/rfi/portal-supabase.ts`), since a portal
+visitor has no Supabase session to apply RLS to in the first place. See
+docs/decisions.md.
+
+### rfi_document_templates
+A requestable document type for one module (e.g. "Payroll register" for
+Employment Practices), admin-authored like `checklist_templates`.
+
+### rfi_document_template_requirements
+Many-to-many: which requirement(s) a document template evidences.
+
+### rfi_requests
+One RFI issued for one assessment, to one `entity_contacts` row, with a
+due date (default 14 calendar days from issue) and a status
+(`open`/`completed`/`expired`/`cancelled`) — `completed` is set
+automatically once every checklist line is `received`
+(`lib/rfi/portal.ts`).
+
+### rfi_checklist_items
+One row per (document template, requirement it evidences) pair requested
+in one RFI — `name`/`requirement_id` are a snapshot at issue time, so
+editing a template later never rewrites an RFI already sent.
+`status`: `outstanding` → `received` (or `waived`).
+
+### rfi_tokens
+The portal link's access credential. Only `token_hash` (SHA-256 of the
+raw token) is stored — the raw value exists only in the emailed link,
+never at rest (`lib/rfi/token.ts`). `expires_at`/`revoked_at` are the two
+ways a token stops working.
+
+### rfi_token_access_log
+Every attempt to use a portal token, valid or not — the "and is logged"
+half of this prompt's 403 acceptance criterion, and the data rate
+limiting reads from. Not `public.audit_log`: these attempts have no
+`actor_id` (no signed-in user exists) and need a fast, token-scoped
+lookup audit_log isn't shaped for.
+
+### rfi_reminders_sent
+Dedupe ledger for the reminder schedule (due date minus 3 days, on the
+due date, once overdue) — `unique(rfi_request_id, kind)` is what actually
+prevents a double-send, not application logic alone
+(`lib/rfi/send-reminders.ts`).

@@ -631,3 +631,122 @@ enough to justify a database function instead. A hand-rolled RFC4180-ish
 parser is used instead of a dependency — quoted commas/newlines/escaped
 quotes are the only real complexity, small enough to own directly and unit
 test exhaustively (18 test cases covering exactly those edge cases).
+
+## Request-for-information flow
+
+**A checklist line is one (document type, requirement) pair, not one
+document type.** The brief says a document type "names the
+requirement(s) it evidences" (plural) and separately requires an
+evidence_files row "linked to the assessment and the requirement"
+(singular) on upload. The only way to satisfy both without ambiguity is
+for `rfi_checklist_items.requirement_id` to be not-null and for one
+document template that evidences several requirements to produce several
+checklist lines when an RFI is issued — one per requirement — all sharing
+the same `document_template_id` so the UI can still group them. The
+alternative (one line per template, requirement chosen arbitrarily at
+upload time) would leave "linked to ... the requirement" undefined
+whenever a template evidences more than one.
+
+**The uploader is fixed to the RFI's own contact, never anything the
+uploader submits.** "The uploader recorded as the entity contact" (this
+prompt) is satisfied by `lib/rfi/portal.ts`'s `recordUpload` reading
+`contact_id` off the `rfi_requests` row the checklist item belongs to —
+not from any field in the upload request. A portal visitor has no
+account and could self-report any name; fixing it server-side to the
+contact the RFI was actually issued to is what makes the recorded
+uploader trustworthy rather than merely present. This also required
+widening `evidence_files.uploaded_by` to nullable and adding
+`uploaded_by_contact_id` (0015_evidence_files_rfi_and_nda.sql) — the
+column was `not null references auth.users`, and a portal upload has no
+Supabase user at all.
+
+**Only a token's hash is ever stored, and the whole portal runs on the
+service-role client.** `rfi_tokens.token_hash` is a SHA-256 of the raw
+token (`lib/rfi/token.ts`) — the same reasoning as a password hash: a
+database read (a backup, a bug, an insider) should never be enough to
+reconstruct a working link. Consequently a portal visitor has no
+Supabase session to apply RLS to, so `rfi_tokens` and
+`rfi_token_access_log` carry **no RLS policies at all** (0014_rfi.sql) —
+every portal read/write goes through `lib/rfi/portal-supabase.ts`'s
+service-role adapter, the same pattern 0005_evidence_ai.sql already
+established for `extractions`/`ai_observations`. One real, permanent
+consequence: staff cannot retrieve or resend a previously issued RFI's
+link — re-issuing generates a new token. Acceptable for what this is (a
+short-lived access credential, not a record), and made explicit in the
+intake dashboard.
+
+**checkPortalAccess/submitPortalUpload are pure orchestration over a
+small RfiPortalDb port, kept in a separate file from the Supabase
+adapter.** Same reasoning as `lib/scheduling/generate-cycle.ts`'s
+GenerateCycleDb: the acceptance criteria ("expired or tampered token
+returns 403 and is logged," "uploading ... creates an evidence_files row
+linked to the assessment and the requirement, with the uploader recorded
+as the entity contact") are about this logic's behaviour, not about
+Supabase Storage bytes. `lib/rfi/portal.ts` has zero "server-only"
+imports and zero Supabase-client construction, so
+`tests/db/rfi-portal.test.ts` can import it directly and exercise the
+real logic against a real local Postgres instance with a hand-rolled
+`pg`-backed adapter — proving both acceptance criteria literally, not by
+inference from a mock. The real Supabase adapter
+(`lib/rfi/portal-supabase.ts`) is a separate file specifically so
+importing it (which pulls in "server-only" and `lib/supabase/admin.ts`)
+never happens as a side effect of testing the orchestration.
+
+**Rate limiting is checked before token validity, against the same
+token hash, using a persisted access log — not an in-memory counter.**
+A serverless route handler has no reliable in-process memory between
+requests, so the sliding-window count (`lib/rfi/token.ts`'s
+`isRateLimited`, 20 attempts / 10 minutes) reads `rfi_token_access_log`
+rows written by every prior attempt, valid or not. Checking the rate
+limit first means a flood of guesses against one hash never even reaches
+a token lookup once the limit is hit.
+
+**RFI due date is 14 *calendar* days, not working days.** The brief's
+`report_due_date` rule explicitly says "working days"; this one doesn't
+say either way, and re-using UAE working-day arithmetic here would be
+inventing a constraint the brief didn't state. Calendar days from
+issuance (the one receipt-adjacent date this system actually controls —
+"from receipt" is read as receipt of the RFI itself, since when the
+recipient opens the email isn't something the system can observe).
+
+**The reminder schedule fires once per milestone, not daily while
+overdue.** `lib/rfi/reminders.ts`'s `reminderKindForDueDate` returns
+"overdue" for every day after the due date, but the caller only ever acts
+on it once — `rfi_reminders_sent`'s `unique(rfi_request_id, kind)`
+constraint is the actual dedupe mechanism (insert either succeeds once or
+hits a unique violation, race-safe in a way a separate select-then-insert
+wouldn't be under a scheduler that might overlap runs), not application
+bookkeeping. The brief lists three milestones, not an escalating daily
+nag.
+
+**Email and virus scanning are both stub implementations behind a
+swappable interface — no provider credentials exist in this project for
+either.** The brief explicitly sanctions this for the virus scanner
+("stub is acceptable for MVP, wired so it can be swapped for a real
+scanner"); `lib/email/send.ts` gets the identical treatment for the same
+reason (no email provider API key in `lib/env/server.ts`, and inventing
+one isn't this repo's call to make). Both are single-function interfaces
+(`EmailSender.send`, `VirusScanner.scan`) with one production call site
+each, so swapping in a real provider later touches one file, not the
+callers.
+
+**The reminder cron endpoint (`app/api/rfi/reminders`) fails closed on a
+missing secret, and is exercised by type-checking/build only, not a DB
+test.** It's triggered by Vercel Cron (`vercel.json`), not a signed-in
+user, so `CRON_SECRET` (optional in `lib/env/server.ts` — a deploy without
+one configured yet shouldn't fail to boot) is the only thing gating it;
+with it unset, every request is rejected rather than the schedule running
+unauthenticated. Its actual send path
+(`lib/rfi/send-reminders.ts`) goes through the real Supabase-js
+service-role client, which the local Postgres test harness has no
+`storage`-adjacent equivalent for — the same limitation the access-letter
+upload and RFI-portal Storage calls already have, documented above and
+in the entity/assessment management phase's decisions.
+
+**NDA confirmation unlocks an entity's evidence for every viewer, not
+per-viewer or per-session.** The brief says "require the assessor to
+confirm an NDA is in place," singular — read as a fact about the entity
+(a real NDA either exists or it doesn't), not a per-person acknowledgment
+each staff member repeats. `entities.nda_confirmed_at`/`nda_confirmed_by`
+record only the most recent confirmation; `components/app/nda-gate.tsx`
+gates on whether *any* confirmation exists, not on who gave it.

@@ -20,6 +20,15 @@ import { clientEnv } from "@/lib/env/client";
 const serverEnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  /**
+   * Authenticates app/api/rfi/reminders — a Vercel Cron trigger, not a
+   * signed-in user, so there's no Supabase session to gate it with.
+   * Optional here (deploys without a reminder schedule configured yet
+   * shouldn't fail to boot) but the route itself refuses every request
+   * when it's unset, rather than running unauthenticated. See
+   * docs/decisions.md.
+   */
+  CRON_SECRET: z.string().min(1).optional(),
 });
 
 function loadServerEnv() {

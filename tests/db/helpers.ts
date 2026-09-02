@@ -32,6 +32,8 @@ const MIGRATION_FILES = [
   "supabase/migrations/0011_assessment_items_quantitative.sql",
   "supabase/migrations/0012_visit_schedule.sql",
   "supabase/migrations/0013_public_holidays.sql",
+  "supabase/migrations/0014_rfi.sql",
+  "supabase/migrations/0015_evidence_files_rfi_and_nda.sql",
 ];
 
 /**

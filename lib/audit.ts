@@ -9,7 +9,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
  * function alone. See supabase/migrations/0001_init.sql.
  */
 export async function writeAudit(
-  actor: string,
+  actor: string | null,
   action: string,
   entityType: string,
   entityId: string,

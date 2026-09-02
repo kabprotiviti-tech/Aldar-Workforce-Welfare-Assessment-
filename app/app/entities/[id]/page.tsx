@@ -89,6 +89,10 @@ export default async function EntityDetailPage({
           <Field label="Worker count" name="worker_count" type="number" min={0} defaultValue={entity.worker_count ?? ""} />
           <Field label="Project name" name="project_name" defaultValue={entity.project_name ?? ""} />
           <Field label="Project type" name="project_type" defaultValue={entity.project_type ?? ""} />
+          <label className="flex items-center gap-2 text-sm text-ds-ink">
+            <input type="checkbox" name="nda_required" defaultChecked={entity.nda_required} className="ds-focus-ring" />
+            NDA required before evidence can be opened
+          </label>
           <Button type="submit" className="justify-self-start">
             Save
           </Button>

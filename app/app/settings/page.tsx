@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createPublicHoliday, removePublicHoliday } from "@/lib/settings/actions";
 import { Card } from "@/components/ds/card";
@@ -24,6 +25,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       </div>
 
       <StatusBanner error={error} />
+
+      <div>
+        <p className="text-sm font-medium text-ds-ink">RFI document templates</p>
+        <p className="mt-1 text-sm text-ds-ink-2">
+          Requested document types per module, and the requirements each evidences.
+        </p>
+        <Link
+          href="/app/settings/rfi-templates"
+          className="ds-focus-ring mt-3 inline-flex items-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+        >
+          Manage RFI templates
+        </Link>
+      </div>
 
       <div>
         <p className="text-sm font-medium text-ds-ink">UAE public holiday calendar</p>

@@ -50,6 +50,7 @@ export async function updateEntity(entityId: string, formData: FormData): Promis
       project_name: optStr(formData, "project_name"),
       project_type: optStr(formData, "project_type"),
       status: str(formData, "status"),
+      nda_required: formData.get("nda_required") === "on",
     })
     .eq("id", entityId);
   if (error) {
@@ -58,6 +59,24 @@ export async function updateEntity(entityId: string, formData: FormData): Promis
   revalidatePath(`/app/entities/${entityId}`);
   revalidatePath("/app/entities");
   redirect(`/app/entities/${entityId}?success=${encodeURIComponent("Entity updated.")}`);
+}
+
+/**
+ * NDA gate (this prompt): one confirmation unlocks this entity's evidence
+ * for every staff member, not per-viewer — see docs/decisions.md.
+ */
+export async function confirmNda(entityId: string, returnTo: string): Promise<void> {
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  const { error } = await supabase
+    .from("entities")
+    .update({ nda_confirmed_at: new Date().toISOString(), nda_confirmed_by: userData.user?.id })
+    .eq("id", entityId);
+  if (error) {
+    redirect(`${returnTo}?error=${encodeURIComponent(error.message)}`);
+  }
+  revalidatePath(returnTo);
+  redirect(returnTo);
 }
 
 export async function createContact(entityId: string, formData: FormData): Promise<void> {

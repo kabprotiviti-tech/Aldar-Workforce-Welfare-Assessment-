@@ -8,3 +8,4 @@ export * from "./rules";
 export * from "./findings";
 export * from "./accommodation-quantitative";
 export * from "./settings";
+export * from "./rfi";
