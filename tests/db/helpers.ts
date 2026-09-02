@@ -34,6 +34,10 @@ const MIGRATION_FILES = [
   "supabase/migrations/0013_public_holidays.sql",
   "supabase/migrations/0014_rfi.sql",
   "supabase/migrations/0015_evidence_files_rfi_and_nda.sql",
+  // 0016_evidence_bucket.sql is deliberately excluded: it operates on
+  // storage.buckets/storage.objects, which only exist in a real Supabase
+  // project, not this local Postgres stand-in. See docs/decisions.md.
+  "supabase/migrations/0017_evidence_review_and_requirements.sql",
 ];
 
 /**

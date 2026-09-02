@@ -189,6 +189,26 @@ RFI request server-side. `virus_scan_status`/`virus_scanned_at` are the
 virus-scan hook's result (`lib/rfi/virus-scan.ts` — a stub today, swappable
 for a real scanner).
 
+`0017_evidence_review_and_requirements.sql` widens `review_status` to
+five values (`outstanding`/`received`/`in_review`/`reviewed`/
+`gap_flagged`, replacing `pending`/`reviewed`) and adds
+`evidence_file_requirements`. `document_class` stays free text at the
+database layer — two administrative sentinel values (`access_letter`,
+`rfi_upload`) already use the column outside the 14-value business
+vocabulary `lib/evidence/classify.ts` proposes from, so the fixed
+vocabulary is enforced with a Zod schema (`documentClassSchema`,
+`lib/db/evidence.ts`) at the app boundary instead of a `check`
+constraint. See docs/decisions.md.
+
+### evidence_file_requirements
+Many-to-many, assessor-editable: which requirement(s) one evidence file
+counts as evidence for (this prompt: "link a file to one or more
+requirements"). Coverage (`lib/evidence/coverage.ts`) is computed from
+this table, scoped to one assessment's own requirements — not from
+`evidence_files.requirement_id`, which is a different, narrower thing:
+the one requirement an RFI checklist line was issued for, set once at
+upload time and never edited.
+
 ### extractions
 One run of the model against one evidence file — what it returned, which
 prompt version, token/cost accounting. Immutable once written: a

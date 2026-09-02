@@ -750,3 +750,93 @@ confirm an NDA is in place," singular — read as a fact about the entity
 each staff member repeats. `entities.nda_confirmed_at`/`nda_confirmed_by`
 record only the most recent confirmation; `components/app/nda-gate.tsx`
 gates on whether *any* confirmation exists, not on who gave it.
+
+## Evidence handling
+
+**Server-side signed upload, not a proxied file body.** This prompt asks
+for "server-side signed upload" specifically because a 40-50MB request
+body through a Vercel serverless function would risk (or outright hit)
+the platform's own body-size limit. `lib/evidence/actions.ts`'s
+`requestEvidenceUpload` validates and classifies from metadata alone
+(filename/mime/size — no bytes), confirms via a normal RLS-scoped read
+that the caller can actually see the target assessment (the real
+authorization check, before Storage is ever touched), then issues a
+signed upload URL through the service-role client. The browser PUTs the
+file directly to Supabase Storage with that URL — the file's bytes never
+pass through this app's server at all.
+
+**Rejection is extension-based, not mime-based.** "Reject anything else
+with a clear message" needs a reliable signal, and the browser-reported
+mime type isn't one — the same `.xlsx` can arrive as the correct
+spreadsheet mime type, `application/octet-stream`, or something else
+entirely depending on the OS's file-type association, which would make
+mime-based rejection either too strict (false rejects) or too loose
+(useless). `lib/evidence/upload-validation.ts` gates on the file
+extension alone; the Storage bucket's own `allowed_mime_types`/
+`file_size_limit` config (0016_evidence_bucket.sql) is a second,
+independent layer of defense at the Storage API itself, not the primary
+or only check, and can't produce this prompt's "clear message" on its
+own (a Storage-layer rejection is a generic API error, not application
+copy).
+
+**0016_evidence_bucket.sql is excluded from the local Postgres test
+harness.** It configures `storage.buckets`/`storage.objects`, which exist
+only in a real Supabase project — the same limitation every other
+Storage-touching migration and code path in this repo already has
+without a live project (documented in the entity/assessment management
+and RFI phases' decisions above). `lib/evidence/upload-validation.ts` and
+`lib/evidence/classify.ts` are proven by unit tests instead, since they
+need no Storage or database access at all — that's the whole reason
+they're pure functions taking plain metadata rather than a File object or
+a Supabase call.
+
+**"xlsx" (the SheetJS npm package) was evaluated and rejected — used
+"read-excel-file" instead.** `npm audit` flagged two unpatched high-
+severity advisories (prototype pollution, ReDoS) with no fix available
+on the registry; SheetJS moved patched releases to their own CDN rather
+than npm, which isn't a source this project pulls dependencies from.
+Since this app parses spreadsheets from files third parties can supply
+(directly, or indirectly via the RFI portal), shipping a library with a
+known, unpatched parser vulnerability was not an acceptable trade for
+convenience. `read-excel-file` (0 known vulnerabilities, browser-native)
+does the same job for the spreadsheet table view.
+
+**PDF pagination for a 40MB file uses the browser's own PDF viewer, not a
+custom pdf.js integration.** The acceptance criterion ("uploads, previews
+and paginates without freezing the browser") is exactly the failure mode
+a naive custom renderer risks — rendering every page of a large scanned
+PDF into canvas elements up front. An `<iframe src={signedUrl}>` hands
+the whole job to the browser's native, battle-tested PDF renderer
+(Chrome/Firefox/Safari all ship one), which streams and paginates the
+document itself. This also means no pdf.js dependency was needed at all.
+The spreadsheet preview caps at 500 rendered rows for the same
+freeze-avoidance reason, for a pathologically large sheet.
+
+**Coverage is computed from evidence_file_requirements, scoped to one
+assessment's own template — not globally, and not from
+evidence_files.requirement_id.** "Coverage" only means something against
+the specific checklist an assessment is being measured on.
+`evidence_files.requirement_id` (added in the RFI phase) is upload-time
+provenance for one specific document — the one requirement an RFI
+checklist line was issued for, immutable once set. Coverage needed a
+different, assessor-editable, genuinely multi-valued relationship, so it
+gets its own join table rather than overloading that column's meaning.
+
+**document_class stays free text at the database layer; the 14-value
+business vocabulary is enforced only at the app boundary.** Two
+administrative sentinel values (`access_letter` from the earlier
+assessment-management phase, `rfi_upload` from the RFI phase) already
+occupy this column outside the classifier's vocabulary — a `check`
+constraint listing all 16 values would misrepresent two of them as
+"business document classes" they aren't. `documentClassSchema`
+(`lib/db/evidence.ts`) is the fixed vocabulary the classifier proposes
+from and the evidence library's dropdown is scoped to; this is the same
+"left unconstrained rather than guessing a full enum" reasoning
+0003_templates.sql already uses for `questions.answer_type`.
+
+**Filenames are normalized (`_`/`-`/`.` → space) before running the
+classifier's keyword rules.** Regex `\b` word-boundary matching (used for
+short tokens like "wps") doesn't treat an underscore as a boundary — it's
+a `\w` character — so `\bwps\b` alone would silently never match
+"WPS_Report.pdf", the most realistic real-world filename shape. Caught by
+the classifier's own unit tests before shipping, not discovered later.

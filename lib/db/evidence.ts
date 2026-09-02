@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { dateSchema, timestampSchema, uuidSchema } from "@/lib/db/common";
 
-export const evidenceReviewStatusSchema = z.enum(["pending", "reviewed"]);
+/** 0017_evidence_review_and_requirements.sql — the assessor's review workflow for one uploaded file. */
+export const evidenceReviewStatusSchema = z.enum(["outstanding", "received", "in_review", "reviewed", "gap_flagged"]);
 export type EvidenceReviewStatus = z.infer<typeof evidenceReviewStatusSchema>;
 
 export const virusScanStatusSchema = z.enum(["pending", "clean", "infected", "error"]);
@@ -29,6 +30,43 @@ export const evidenceFileRowSchema = z.object({
   updated_at: timestampSchema,
 });
 export type EvidenceFileRow = z.infer<typeof evidenceFileRowSchema>;
+
+/**
+ * evidence_files.document_class stays free text at the database layer
+ * (like questions.answer_type — "left unconstrained rather than guessing
+ * a full enum," 0003_templates.sql) because two administrative sentinel
+ * values already use the same column ("access_letter", "rfi_upload") that
+ * aren't part of this business-classification vocabulary. This is the
+ * fixed vocabulary lib/evidence/classify.ts proposes from and the
+ * evidence library's dropdown is scoped to — enforced at the app
+ * boundary, not the database. See docs/decisions.md.
+ */
+export const documentClassSchema = z.enum([
+  "wps_report",
+  "payroll_register",
+  "employment_contract",
+  "recruitment_agreement",
+  "passport_register",
+  "insurance_schedule",
+  "accommodation_contract",
+  "civil_defence_certificate",
+  "occupancy_schedule",
+  "approved_drawing",
+  "worker_register",
+  "induction_register",
+  "vehicle_registration",
+  "photo",
+]);
+export type DocumentClass = z.infer<typeof documentClassSchema>;
+
+/** 0017_evidence_review_and_requirements.sql — the assessor-editable set of requirements one file counts as evidence for. */
+export const evidenceFileRequirementRowSchema = z.object({
+  evidence_file_id: uuidSchema,
+  requirement_id: uuidSchema,
+  created_at: timestampSchema,
+  created_by: uuidSchema.nullable(),
+});
+export type EvidenceFileRequirementRow = z.infer<typeof evidenceFileRequirementRowSchema>;
 
 /** What the model returned for one evidence file. Immutable once written. */
 export const extractionRowSchema = z.object({
