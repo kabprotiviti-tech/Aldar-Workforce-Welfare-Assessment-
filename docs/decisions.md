@@ -157,3 +157,95 @@ brief's own closing instruction):
   card — removed in favor of a single hairline grid (1px rules between
   cells via a background-color grid gap), which is what the client's own
   report actually looks like and reads as one instrument, not six widgets.
+
+## 2026-09-02 — Auth, env validation, and the append-only audit log
+
+Wired up Supabase Auth (email/password), the `public.users` and
+`public.audit_log` tables, and boot-time env validation, per the brief.
+Scope stayed to exactly what was asked: a plain sign-in page and an empty
+`/app` shell, nothing more.
+
+**Env var naming — one deliberate deviation from the literal brief.** Asked
+to fail loudly if `SUPABASE_URL` is missing; the actual var is named
+`NEXT_PUBLIC_SUPABASE_URL`. Next.js only inlines `NEXT_PUBLIC_`-prefixed
+vars into the browser bundle, and the URL has to reach `lib/supabase/browser.ts`
+— so it's declared once under that name (`lib/env/client.ts`) and re-checked
+from `lib/env/server.ts`, rather than duplicated under a second, server-only
+name for no functional reason. The value isn't secret either way (the anon
+key is designed to be public; RLS is what actually protects data) — only
+the "fail loudly if missing" behavior mattered, and it's preserved exactly:
+booting without it throws the same way booting without
+`SUPABASE_SERVICE_ROLE_KEY` or `ANTHROPIC_API_KEY` does.
+
+**"Fail loudly at boot" — two mechanisms, not one.** `instrumentation.ts`'s
+`register()` imports `lib/env/server`, which is Next's documented hook for
+one-time server-boot work — this is the literal "at boot" check. In
+practice a second, earlier failure mode showed up during manual testing:
+Next.js evaluates a route's module graph during `next build`'s page-data
+collection for any dynamically-rendered route (here, `/app` and `/sign-in`,
+since both read cookies/searchParams), so a missing var fails the *build*
+itself, before a server ever boots. Both are documented as intentional:
+whichever runs first, the failure is loud either way. One consequence: the
+build now needs placeholder env values to succeed at all if `/app` or
+`/sign-in` are touched, even though `/` and `/workspace` don't need them —
+a real cost of adding auth, accepted rather than worked around.
+
+**Client vs. server vs. admin Supabase clients.** Three files, one job
+each: `lib/supabase/browser.ts` (anon key, client components),
+`lib/supabase/server.ts` (anon key + the caller's session cookie, respects
+RLS — every normal Server Component/Action/Route Handler should use this),
+`lib/supabase/admin.ts` (service-role key, bypasses RLS, server-only). The
+service-role key is guarded by the `server-only` package, not just by
+convention: any client component that imports it, even transitively, is a
+*build error*, not a runtime leak. `writeAudit()` (`lib/audit.ts`) is the
+one thing that uses the admin client, and it only ever calls `.insert()`.
+
+**Sign-in uses a Server Action, not a browser-side Supabase client.**
+`lib/auth/actions.ts`'s `signInWithPassword` runs entirely server-side,
+sets the session cookie itself, and redirects to `/app` on success or back
+to `/sign-in?error=...` on failure — the sign-in page ships zero client
+JS. This is Supabase's own recommended App Router pattern, and it means
+the acceptance criterion ("no service-role key or Anthropic key in any
+client bundle") has nothing to even scan for on this page: no Supabase
+client of any kind is imported by client-bundled code here.
+
+**`middleware.ts` → `proxy.ts`.** Next 16 deprecated the `middleware`
+file convention in favor of `proxy` mid-way through writing this — caught
+by the build's own deprecation warning, fixed immediately (file renamed,
+exported function renamed from `middleware` to `proxy`, same `config.matcher`).
+Scoped the matcher to `/app/:path*` and `/sign-in` only, not every route, so
+the session-refresh cost and the Supabase env dependency don't spread to
+the marketing site or `/workspace`, which have no reason to need either.
+
+**Audit log append-only — proven, not just asserted.** No Docker available
+in this environment, so a full local Supabase stack couldn't be started;
+what *is* available is a local Postgres 16 install, which is what
+Supabase's RLS enforcement actually runs on underneath the BaaS layer. Set
+that up (`tests/db/local-setup.sql` recreates just enough of a Supabase
+project's shape — the `anon`/`authenticated`/`service_role` roles and a
+minimal `auth.users` + `auth.uid()` stand-in — for the real, unmodified
+`supabase/migrations/0001_init.sql` to run against it unchanged) and wrote
+`tests/db/audit-log.rls.test.ts`, which really connects as `authenticated`
+and really attempts `UPDATE`/`DELETE` against an existing row — with table-
+level grants for both commands present, specifically so the only thing
+that can be stopping the write is the RLS policy itself, not a missing
+`GRANT`. Ran it in this session: 3/3 pass. It skips cleanly (not a hard
+failure) if `TEST_DATABASE_URL` isn't reachable, since not every
+environment this repo runs in will have a Postgres available.
+
+One caveat this test cannot cover, and the migration's own comment says
+so: `service_role` bypasses RLS by design in Postgres/Supabase, for any
+role that carries `BYPASSRLS` — no policy can change that. `writeAudit()`
+is the only code path that uses the service-role client, and it only ever
+calls `.insert()`, so that bypass is never exercised by this app. If a
+future change ever gives the admin client an update/delete path onto
+`audit_log`, this stops being sound and needs revisiting.
+
+**What wasn't fully proven.** "A user can sign in and hit a protected
+`/app` route" was verified structurally and for the fail-closed half: a
+real HTTP request to `/app` with no session returns a 307 to `/sign-in` in
+a production build (`next start`), confirmed in this session. The
+success half — valid credentials landing on `/app` — needs a live
+Supabase project with a real user in it, which doesn't exist in this
+environment; provisioning one and running that path end-to-end is the
+first thing to do before treating this as fully verified.
