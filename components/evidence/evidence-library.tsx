@@ -21,6 +21,8 @@ import { Button } from "@/components/ds/button";
 import { ProgressBar } from "@/components/ds/progress-bar";
 import { EvidencePreview, type PreviewFocus } from "@/components/evidence/evidence-preview";
 import { FactLedger } from "@/components/facts/fact-ledger";
+import { ObservationPanel, type ObservationRequirementOption } from "@/components/observations/observation-panel";
+import type { ObservationView } from "@/lib/observations/store";
 import { parsePageRef, type LedgerFact } from "@/lib/facts/ledger";
 
 export interface EvidenceFileData {
@@ -63,6 +65,8 @@ export interface EvidenceLibraryProps {
   extractions: ExtractionSummaryData[];
   /** Every extracted fact for this assessment's files, proposed ones included — the ledger is the one surface that shows unreviewed values. */
   facts: LedgerFact[];
+  observations: ObservationView[];
+  observationRequirements: ObservationRequirementOption[];
 }
 
 interface BatchProgressState {
@@ -147,12 +151,24 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-export function EvidenceLibrary({ assessmentId, subjectCode, entityName, requirements, files, links, extractions, facts }: EvidenceLibraryProps) {
+export function EvidenceLibrary({
+  assessmentId,
+  subjectCode,
+  entityName,
+  requirements,
+  files,
+  links,
+  extractions,
+  facts,
+  observations,
+  observationRequirements,
+}: EvidenceLibraryProps) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(files[0]?.id ?? null);
   const [uploading, setUploading] = useState(false);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [focusedFact, setFocusedFact] = useState<LedgerFact | null>(null);
+  const [rightPanel, setRightPanel] = useState<"facts" | "observations">("facts");
   const { batch, extracting, startError, start } = useExtractionBatch(assessmentId, () => router.refresh());
 
   const selectedFile = files.find((f) => f.id === selectedId) ?? null;
@@ -261,6 +277,10 @@ export function EvidenceLibrary({ assessmentId, subjectCode, entityName, require
                 previewFocus={previewFocus}
                 focusedFactId={focusedFact?.id ?? null}
                 onFocusFact={setFocusedFact}
+                observations={observations}
+                observationRequirements={observationRequirements}
+                rightPanel={rightPanel}
+                onRightPanelChange={setRightPanel}
               />
             ),
           },
@@ -296,6 +316,10 @@ function ThreePanelLibrary({
   previewFocus,
   focusedFactId,
   onFocusFact,
+  observations,
+  observationRequirements,
+  rightPanel,
+  onRightPanelChange,
 }: {
   assessmentId: string;
   files: EvidenceFileData[];
@@ -317,6 +341,10 @@ function ThreePanelLibrary({
   previewFocus: PreviewFocus | null;
   focusedFactId: string | null;
   onFocusFact: (fact: LedgerFact) => void;
+  observations: ObservationView[];
+  observationRequirements: ObservationRequirementOption[];
+  rightPanel: "facts" | "observations";
+  onRightPanelChange: (panel: "facts" | "observations") => void;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_1fr_260px]">
@@ -512,16 +540,44 @@ function ThreePanelLibrary({
         )}
       </div>
 
-      {/* The fact ledger sits beside the preview on purpose: clicking a
-          fact has to move the document next to it (this prompt). */}
+      {/* The right panel carries both review surfaces, tabbed rather
+          than stacked: the fact ledger has to sit beside the preview so
+          clicking a fact moves the document next to it, and the
+          observation panel is the same reviewer's next step. */}
       <div className="rounded-ds-card border border-ds-line bg-ds-surface-2 p-3">
-        <FactLedger
-          assessmentId={assessmentId}
-          facts={selectedFile ? (factsByFile.get(selectedFile.id) ?? []) : []}
-          focusedFactId={focusedFactId}
-          onFocusFact={onFocusFact}
-          onResolved={() => router.refresh()}
-        />
+        <div className="mb-3 flex gap-1" role="tablist" aria-label="Review panel">
+          {(["facts", "observations"] as const).map((panel) => (
+            <button
+              key={panel}
+              type="button"
+              role="tab"
+              aria-selected={rightPanel === panel}
+              onClick={() => onRightPanelChange(panel)}
+              className={`ds-focus-ring rounded-ds-control px-2.5 py-1 text-xs font-medium capitalize transition-colors duration-150 ${
+                rightPanel === panel ? "bg-ds-accent text-white" : "text-ds-ink-2 hover:bg-ds-surface"
+              }`}
+            >
+              {panel}
+            </button>
+          ))}
+        </div>
+
+        {rightPanel === "facts" ? (
+          <FactLedger
+            assessmentId={assessmentId}
+            facts={selectedFile ? (factsByFile.get(selectedFile.id) ?? []) : []}
+            focusedFactId={focusedFactId}
+            onFocusFact={onFocusFact}
+            onResolved={() => router.refresh()}
+          />
+        ) : (
+          <ObservationPanel
+            assessmentId={assessmentId}
+            observations={observations}
+            requirements={observationRequirements}
+            onChanged={() => router.refresh()}
+          />
+        )}
       </div>
     </div>
   );

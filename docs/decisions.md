@@ -1267,3 +1267,93 @@ per resident passes; exactly 8 residents passes; a transfer on the 15th
 passes; a certificate expiring *on* the assessment date fails (it does not
 cover that date). Each is its own test with the boundary in the title, so
 a future change that moves one of them fails loudly rather than quietly.
+
+## Observation layer
+
+`lib/observations/`, `lib/ai/prompts/observations/v1.ts`,
+`components/observations/observation-panel.tsx`,
+`supabase/migrations/0023_observations.sql`. The model writes the
+narrative; code decides everything that could affect a judgement.
+
+**The model cannot emit a compliance status, in two independent ways.**
+The response schema has no such field and is `.strict()`, so a `status`
+key fails validation outright — and `stripStatusLikeKeys` removes any
+status/rating/compliant/score key first, recording what it removed. Both
+are tested, including the schema rejecting each forbidden key by name.
+
+**Stripping runs *before* schema validation, not after.** With a strict
+schema, a status key left in place would fail the whole response and
+throw away the usable narrative with it. Stripping first means a model
+that adds `"status": "compliant"` still yields a valid observation — with
+the key gone, the attempt logged, and the kind still set by code. Keys
+are matched, never values: a narrative that mentions "the WPS batch
+status column" is untouched.
+
+**The stripping is logged to audit_log, not the console.** This is the
+model attempting the one thing it is never allowed to do, so the record
+has to outlive a log buffer:
+`ai_observation.status_key_stripped`, with the paths and the prompt
+version. It is written even when the response failed validation for some
+other reason.
+
+**The kind is a pure function of the rule outcome.** pass →
+`evidence_identified`, fail → `requires_attention`, insufficient_data →
+`potential_gap` (this prompt, verbatim). `kindForRuleOutcome` is the only
+thing that sets it. Note that insufficient_data mapping to *potential
+gap* rather than evidence-identified is the same principle the rule
+engine holds: "we could not tell" is never "it was fine".
+
+**The outcome word is deliberately not sent to the model.** The request
+carries each rule's computed working but not whether it passed. The model
+doesn't need the verdict to describe what the working says, and
+withholding it removes the temptation to editorialise about one. Tested.
+
+**Source references are validated against the inputs, never trusted.** A
+fact key the model invented is dropped, and if nothing real is left the
+observation is discarded with a reason. The one exception is a rule that
+reads no facts at all (`R16_HOURS`, `ACM_TOILET_RATIO` evaluate
+assessor-entered figures, so no fact key exists for their observations to
+cite): there the stored rule evaluation and its working are the traceable
+origin. A rule that *does* read facts must have one cited — that is
+precisely the case where a plausible-sounding narrative gets untethered
+from the evidence — and an unrecognised rule code must produce a real
+fact or file source. This is a judgment call about the prompt's "(file,
+page, fact key)" parenthetical: read absolutely literally it would
+silently discard every observation for two of the thirteen rules, which
+is worse behaviour than naming the evaluation as the source.
+
+**Facts are narrowed to the keys the item's own rules declare.** An
+observation about working hours has no business being handed the
+insurance policy dates, and a prompt stuffed with every confirmed fact on
+the assessment invites exactly the cross-contamination the source
+validation exists to prevent.
+
+**No rule results means no observations, stated rather than invented.**
+Every observation's kind derives from a rule result, so an item with no
+evaluations has nothing this generator can legitimately produce. It
+returns that as an error and calls no model at all.
+
+**An assessor's own observation is stored `confirmed` and authored
+`assessor`.** It needs no validation by the person who just wrote it, and
+it goes straight to the workspace. Keeping `authored_by` distinguishable
+matters for the report and the audit trail — "the platform said" and "the
+assessor said" are not the same claim.
+
+**Rejected observations are retained with their reason.** The row stays
+and the status changes, so a later reader can see what was proposed and
+why it was refused. The reason is required by the server action rather
+than a check constraint, since the column must stay null for every other
+status.
+
+**The standing notice is a shared constant, rendered above the list.**
+"Observations require assessor validation. The platform does not set
+compliance status." lives in `lib/observations/store.ts` so the panel and
+the tests state it identically, and it is rendered before any observation
+so it is read first — not in a dismissible toast.
+
+**Workspace visibility is a status filter in the query, not a caller's
+discipline.** `listConfirmedObservations` filters to `confirmed`;
+`open` is excluded as well, since an unreviewed narrative is a proposal
+and the workspace is where the assessment is made. Proven on real rows,
+including that a rejected one is retained but invisible, and that the
+query is scoped to one requirement's own item.

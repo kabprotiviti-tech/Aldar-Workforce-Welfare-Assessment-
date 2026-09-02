@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { listFactsForEvidenceFiles } from "@/lib/facts/ledger-supabase";
+import { listObservationsForAssessment } from "@/lib/observations/generate-supabase";
 import { EvidenceLibrary } from "@/components/evidence/evidence-library";
 
 function oneOf<T>(value: T | T[] | null): T | null {
@@ -55,6 +56,32 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
     listFactsForEvidenceFiles(supabase, fileIds),
   ]);
 
+  // Observations hang off assessment_items (one per requirement), not off
+  // evidence files — an observation is about a requirement, and its
+  // source reference points back at the file.
+  const [observations, { data: itemRows }] = await Promise.all([
+    listObservationsForAssessment(supabase, id),
+    supabase
+      .from("assessment_items")
+      .select("id, requirement_id, requirements(sl_no, title)")
+      .eq("assessment_id", id)
+      .order("created_at"),
+  ]);
+
+  const observationRequirements = (itemRows ?? [])
+    .map((row) => {
+      const requirement = oneOf(row.requirements as unknown as { sl_no: number; title: string } | { sl_no: number; title: string }[] | null);
+      return requirement
+        ? {
+            assessmentItemId: row.id as string,
+            requirementId: row.requirement_id as string,
+            slNo: requirement.sl_no,
+            title: requirement.title,
+          }
+        : null;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
   // extractions is ordered newest-first, so the first row seen per file is its latest attempt.
   const latestExtractionByFile = new Map<string, { costUsd: number | null; error: string | null }>();
   for (const e of extractions ?? []) {
@@ -91,6 +118,8 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
         factCount: factCountByFile.get(fileId) ?? 0,
       }))}
       facts={facts}
+      observations={observations}
+      observationRequirements={observationRequirements}
     />
   );
 }

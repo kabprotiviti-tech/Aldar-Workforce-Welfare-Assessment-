@@ -87,6 +87,39 @@ export async function callClaudeForExtraction(input: CallClaudeForExtractionInpu
   };
 }
 
+export interface CallClaudeForTextInput {
+  systemPrompt: string;
+  userText: string;
+}
+
+/**
+ * A text-only call — no document or image block. Used by the observation
+ * generator (lib/observations/generate.ts), which writes narrative from
+ * facts and rule results that have already been extracted and computed,
+ * so it has no file to read. Same client, timeout and retry policy as the
+ * extraction call.
+ */
+export async function callClaudeForText(input: CallClaudeForTextInput): Promise<CallClaudeForExtractionResult> {
+  const client = getClient();
+
+  const response = await client.messages.create({
+    model: EXTRACTION_MODEL,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    system: input.systemPrompt,
+    messages: [{ role: "user", content: [{ type: "text", text: input.userText }] }],
+  });
+
+  const textBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === "text");
+
+  return {
+    text: textBlock?.text ?? "",
+    model: response.model,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    stopReason: response.stop_reason,
+  };
+}
+
 // Cost computation (computeCostUsd) lives in lib/ai/cost.ts — pure, no
 // "server-only", so it stays importable from a plain Vitest test and from
 // client-side UI code without dragging in this module's Anthropic client

@@ -277,6 +277,27 @@ Something the model flagged for a human to look at (a gap, something worth
 attention) — never a compliance status, always routed to
 `confirmed`/`rejected`/`noted` by a person (`actioned_by`).
 
+### ai_observations (0023_observations.sql)
+The narrative layer between facts, rules and the assessor. The three
+kinds were already right in 0005; this migration adds what source
+referencing and validation need: `source_fact_keys`/`page_ref` (the
+structured half of a source reference — an observation with none is
+discarded before it is ever stored), `requirement_id` (set from the item,
+never from the model), `rule_code`/`rule_evaluation_id` (the result whose
+outcome *code* turned into the kind), `model`/`prompt_version`
+provenance, `rejection_reason` (a rejected observation is retained, not
+deleted), and `authored_by` (`model` or `assessor` — "Add observation"
+makes an assessor a first-class author).
+
+Note what the table still has no column for: a compliance status, a
+rating or a score. `status` here is the review state
+(`open`/`confirmed`/`rejected`/`noted`), and a test asserts the
+distinction.
+
+0008 granted only select/update to `authenticated` because every row used
+to be model-written through the service-role client; 0023 adds `insert`
+under `can_write_operational()` so an assessor can add their own.
+
 ### extraction_jobs
 `0019_extraction_jobs.sql`. The document extraction batch queue (this
 prompt: "a queue so a batch of 18 documents extracts in the background
