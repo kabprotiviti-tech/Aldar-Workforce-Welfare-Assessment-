@@ -373,3 +373,76 @@ constraint "pg_extension_name_index"`) — fixed with `fileParallelism:
 false`, cheap for a suite this size and the correct fix for tests sharing
 one physical external resource, rather than trying to isolate every DB
 test into its own throwaway database.
+
+## 2026-09-02 — Template v1 content, immutability by trigger, quantitative schema
+
+Seeded checklist_templates v1 for all three modules with real content —
+the 23 Employment Practices/Onboarding requirement titles and `is_key`
+flags, the 12 Accommodation area titles — and made "immutable once
+referenced" an actual database guarantee instead of the comment
+`0003_templates.sql` left it as.
+
+**Convention → trigger.** `0003_templates.sql` said template content
+should freeze once in use but didn't enforce it, on the grounds that
+there was no draft-state workflow yet to make a freeze mechanism useful.
+This prompt's acceptance criteria ask for exactly that guarantee, proven
+by a test — so `0009_template_immutability.sql` adds it: a trigger on
+`checklist_templates`/`requirements`/`questions` that blocks any
+UPDATE/DELETE, and any INSERT of a new sibling row, the moment
+`public.assessments` has a row pointing at that template. Triggers fire
+for every role, including a superuser — a stronger guarantee than RLS,
+which a `BYPASSRLS` role like `service_role` sidesteps entirely (see the
+audit_log entry above). The one exception is `checklist_templates.is_active`:
+retiring an in-use version by flipping it to inactive still has to work,
+so the trigger diffs OLD vs NEW and only blocks a change that touches any
+other column. Proven in `tests/db/template-immutability.test.ts`: editing,
+deleting, or adding a sibling to a referenced template's content all
+raise; toggling `is_active` on it still succeeds; creating v2 with
+deliberately different content leaves v1's own requirements, its
+assessment's `template_id`, and its report row completely unchanged; and
+a template with no assessment against it yet can still be edited freely
+(the mechanism doesn't over-block).
+
+**assessment_items needed a `quantitative` column that didn't exist.**
+The Accommodation template's mandatory fields (location, capacity,
+occupancy, area per resident, etc.) are captured "per area, regardless of
+the answer given" — i.e. scoped to one assessment_item, not to one
+question's answer. The existing `assessment_answers.quantitative`
+(0004_assessments.sql) is the wrong home for that: it's a child of one
+specific question. Added `assessment_items.quantitative jsonb`
+(`0011_assessment_items_quantitative.sql`) instead.
+
+**The quantitative field → area mapping is this file's own judgment call,
+not given directly, and needs confirming.** The brief lists eight kinds of
+mandatory quantitative data (location/capacity/occupancy,
+area-per-resident, residents-per-toilet/shower/washbasin, kitchen and mess
+hall details, clinic type/capacity/provider, certificate/contract
+validity) and says to model them "per area," without saying which of the
+12 areas each belongs to. `lib/db/accommodation-quantitative.ts` assigns:
+location/capacity/occupancy to area 1 (General requirements);
+area-per-resident to area 2 (Bedrooms); the three per-fixture ratios to
+area 3 (Bathrooms); kitchen details to area 4 (Kitchens); mess hall
+details to area 5 (Mess halls); clinic fields to area 6 (Medical
+services); and — the least certain part of this mapping — a reusable
+`certificateSchema` (type/number/issuer/validity dates) attached to areas
+1, 6, 11 (Utilities), and 12 (Firefighting and alarm systems), on the
+reasoning that those are the areas most plausibly gated by an actual
+certificate. Areas 7-10 (Laundry, Public health requirements,
+Accommodation management, Health safety and security) get no mandatory
+quantitative fields at all — none were named for them, and inventing one
+felt worse than leaving it empty. All of this is a schema-design guess in
+the absence of the real checklist, not fabricated regulatory content —
+worth confirming against the actual Cabinet Decision 13/2009 and
+Ministerial Resolution 212/2014 checklists before it's load-bearing.
+
+**What's still missing, deliberately, per this prompt's own instruction
+not to invent it:** the EP/Onboarding `detail_text` (each requirement's
+lettered sub-clauses) and the Accommodation template's numbered key
+questions (1.1, 1.2, ...) per area. Neither exists anywhere in this repo
+(checked before writing anything — grepped for recognisable fragments of
+the given requirement titles and found only this session's own earlier,
+unrelated placeholder/demo data). Both are real client policy content,
+not something to approximate. `requirements.detail_text` is seeded
+`null` throughout; `questions` has zero rows for the Accommodation
+template. Asked the user to paste both, and to confirm or correct the
+quantitative-field mapping above, rather than guessing further.

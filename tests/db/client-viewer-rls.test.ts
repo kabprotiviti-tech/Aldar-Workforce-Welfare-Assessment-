@@ -39,9 +39,12 @@ describe.skipIf(!reachable)("client_viewer RLS is scoped to their own entity", (
     const cycle = await adminPool.query<{ id: string }>(
       "insert into public.cycles (year, name) values (2026, 'RLS test cycle') returning id",
     );
+    // version 101: 0010_seed_checklist_templates_v1.sql already seeds
+    // employment_practices version 1, so this test's own fixture template
+    // uses a version number well outside that range to avoid colliding.
     const template = await adminPool.query<{ id: string }>(
       `insert into public.checklist_templates (module, version, effective_from, is_active)
-       values ('employment_practices', 1, current_date, true) returning id`,
+       values ('employment_practices', 101, current_date, true) returning id`,
     );
     const requirement = await adminPool.query<{ id: string }>(
       `insert into public.requirements (template_id, sl_no, title)

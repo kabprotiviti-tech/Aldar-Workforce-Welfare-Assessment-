@@ -72,6 +72,8 @@ export const assessmentItemRowSchema = z.object({
   decided_by: uuidSchema.nullable(),
   decided_at: timestampSchema.nullable(),
   locked: z.boolean(),
+  /** Accommodation's mandatory per-area quantitative fields — see lib/db/accommodation-quantitative.ts. */
+  quantitative: z.unknown().nullable(),
   created_at: timestampSchema,
   updated_at: timestampSchema,
   created_by: uuidSchema.nullable(),

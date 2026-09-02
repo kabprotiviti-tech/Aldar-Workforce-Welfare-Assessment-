@@ -27,6 +27,9 @@ const MIGRATION_FILES = [
   "supabase/migrations/0006_rules_measurement.sql",
   "supabase/migrations/0007_findings_reports.sql",
   "supabase/migrations/0008_grants.sql",
+  "supabase/migrations/0009_template_immutability.sql",
+  "supabase/migrations/0010_seed_checklist_templates_v1.sql",
+  "supabase/migrations/0011_assessment_items_quantitative.sql",
 ];
 
 /**

@@ -22,6 +22,16 @@ restricts rows on top of a grant, it never creates one, and this migration
 exists because that distinction caused a real bug during development (see
 docs/decisions.md).
 
+`0009_template_immutability.sql` enforces, with triggers rather than
+convention, that a `checklist_templates` row and its `requirements`/
+`questions` freeze the moment any `assessments` row references that
+template — no update, delete, or new sibling row, for any Postgres role
+including a superuser, with one exception (`is_active`, so a version can
+still be retired). `0010_seed_checklist_templates_v1.sql` seeds version 1
+for every module with real content; `0011_assessment_items_quantitative.sql`
+adds the column the Accommodation template's mandatory quantitative
+capture actually lives on.
+
 ## Core
 
 ### organisations
@@ -62,26 +72,36 @@ against.
 
 ## Templates
 Versioned checklists. A report has to stay reproducible against the exact
-template version it was assessed under (CONTEXT.md), so a template's
-content is meant to stay fixed once published — new content ships as a new
-version, never an edit to one already in use. That's a process convention
-documented here and enforced by team practice, not by a database
-constraint (see docs/decisions.md for why adding one felt disproportionate
-to what was asked).
+template version it was assessed under (CONTEXT.md), so once any
+assessment references a template, that template and its requirements/
+questions are frozen — enforced by a trigger
+(`0009_template_immutability.sql`), not just team practice: no update,
+delete, or new row underneath an in-use template, for any role, with one
+exception (`is_active`, so a version can still be retired). New content
+ships as a new version instead.
 
 ### checklist_templates
 One row per module per version (`employment_practices` / `onboarding` /
 `accommodation`), with `is_active` marking the current one.
+`0010_seed_checklist_templates_v1.sql` seeds version 1 for all three.
 
 ### requirements
 A template's numbered requirements. For Employment Practices/Onboarding
-these are literally "requirements"; for Accommodation, the same table
-holds its 12 assessment areas — one table, two names depending on module,
-rather than two near-identical tables.
+these are literally "requirements" — the same 23, shared verbatim but
+inserted as two separate rows-per-template since a template belongs to
+exactly one module (`0010_seed_checklist_templates_v1.sql`), 10 of them
+`is_key`. For Accommodation, the same table holds its 12 assessment areas
+— one table, two names depending on module, rather than two
+near-identical tables. `detail_text` (the EP/Onboarding sub-clause text an
+assessor needs to see) is seeded `null` — real policy content pending
+from the client, not invented to fill the column.
 
 ### questions
 The per-requirement questions an assessor answers during an office
-visit/document review, feeding `assessment_answers`.
+visit/document review, feeding `assessment_answers`. No rows yet for the
+Accommodation template's 12 areas — its numbered key questions are real
+regulatory content pending from the client, same reasoning as
+`detail_text` above.
 
 ## Assessments
 One row per entity (or facility) per cycle per module, and its
@@ -100,7 +120,13 @@ assessment is never visible to the client it's about.
 One row per requirement within one assessment — the compliance status,
 remark, and action required for closure that `lib/rules/validation.ts`
 checks. `carried_forward_from_item_id` links a requirement not reassessed
-this cycle back to the item it inherited its rating from.
+this cycle back to the item it inherited its rating from. `quantitative`
+(`0011_assessment_items_quantitative.sql`) holds the Accommodation
+template's mandatory per-area fields (location, capacity, occupancy, area
+per resident, etc.) — captured regardless of the area's Yes/No/Unclear/
+Not Applicable answer, so it lives on the item, not on one question's
+answer. Shape validated by the per-area schemas in
+`lib/db/accommodation-quantitative.ts`.
 
 ### assessment_answers
 One row per question within one assessment item, for the modules that
