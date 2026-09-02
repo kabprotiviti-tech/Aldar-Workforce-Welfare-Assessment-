@@ -1120,3 +1120,150 @@ rather than changing it.
 future migration adds a status this build doesn't know,
 `ledgerFactFromRow` maps it to `proposed` rather than assuming it's
 confirmed. The safe direction for a gate is to under-trust.
+
+## Compliance rule engine
+
+`lib/rules/compliance/`, `supabase/migrations/0022_rule_engine.sql`. The
+13 v1 rules from this prompt, as typed functions with declared inputs, a
+threshold, a legal reference and an explanation template. CONTEXT.md rule
+2 says the model never performs arithmetic or comparison; this is where
+that arithmetic lives.
+
+**"No model call may occur in this module" is enforced by a test, not a
+comment.** `lib/rules/compliance/no-model-call.test.ts` fails if any file
+under `lib/rules/compliance/` imports `@anthropic-ai/sdk` or `lib/ai`, or
+mentions `fetch`/`XMLHttpRequest`. A comment saying "no AI here" would
+not survive a future edit; a failing test will.
+
+**Kept separate from the existing `lib/rules/`.** `validation.ts` and
+`aggregate.ts` (built in the first phase of this project) do a different
+job: they validate an assessor's *chosen* compliance status and compute
+report header metrics. These rules evaluate evidence against thresholds.
+Same directory, different subfolder, no shared types — collapsing them
+would have made "the rule engine" ambiguous in every future conversation.
+
+**`insufficient_data` is never silently a pass, and says so in words.**
+Every such result renders as "Insufficient data — this rule could not be
+evaluated and is not a pass. Missing: `<keys>`." The phrasing is
+deliberate: this text goes into an assessor's screen and a client's
+report, where "no result" must not read as "no problem".
+`tallyOutcomes` counts it in its own bucket, and nothing in the module
+maps it onto pass or fail.
+
+**A missing input names every missing key at once.** `requireAll`
+(`lib/rules/compliance/inputs.ts`) collects all of them rather than
+failing on the first, so an assessor is told everything a rule still
+needs in one pass. A key counts as missing when it is absent, when its
+confirmed value is null (a person confirmed the document doesn't state
+it — real information, but not a value to compute with), or when it is
+present in a shape the rule can't use. `false` and `0` are values, not
+absences, which matters for `R08_AGENCY_CLAUSE`: a confirmed *absent*
+employer-pays clause is a **fail**, not a gap.
+
+**Displayed numbers can never contradict the verdict beside them.**
+26.4 m² across 8 residents is 3.3, which prints as "3.30" — but 31.99 m²
+across 8 is 3.99875, which at two decimals prints as "4.00" beside a
+"Minimum 4.00 m²" it actually falls short of. `formatComparable` adds the
+least precision that separates the value from the threshold ("3.999"), so
+a failing figure always looks like it fails. This is a small thing that
+would have destroyed trust in the engine the first time a client read it.
+
+**Explanation templates are declared strings rendered by a strict
+renderer.** `renderTemplate` throws on a token the rule didn't supply,
+rather than shipping a literal `{minimum}` into a report. Templates are
+also stored in `rule_definitions.explanation_template` so an admin can see
+the wording a rule produces; rendering itself uses the rule's own copy,
+since the tokens are the function's contract. Only thresholds (and the
+citation) are the admin-editable surface — which is exactly what this
+prompt specified.
+
+**An invalid stored threshold is a configuration error, not
+`insufficient_data`.** `run()` validates thresholds against the rule's own
+Zod schema and returns `{ok: false, configError}`; the runner reports it
+and stores no evaluation row. Two alternatives were worse: folding it
+into `insufficient_data` would disguise an admin's broken threshold as
+missing evidence, and silently falling back to the code defaults would
+stamp the evaluation with one threshold while computing it with another.
+
+**`run()` returns the thresholds it used, so stamping cannot drift from
+the computation.** A null stored threshold means "use the rule's declared
+defaults", and the value that comes back is whichever was actually
+applied — the evaluation is stamped from that, never from a second read
+of the definition row.
+
+**Thresholds are seeded in SQL *and* declared in code, with a drift
+test.** The table is where they live and what an admin edits; the code
+carries the same values as its fallback. That is two sources of the same
+numbers, so `tests/db/rule-engine.test.ts` compares every seeded row's
+threshold, fact keys, quantitative keys and template against the rule's
+own declarations and fails if they diverge. The alternative — seeding
+`threshold = null` and keeping the numbers only in code — would have made
+"thresholds live in rule_definitions" untrue.
+
+**An admin edit supersedes; it never updates.** A new `version` row is
+inserted and the previous one deactivated, a partial unique index keeps
+exactly one active version per code, and a trigger makes a definition
+immutable once an evaluation points at it. Editing in place would
+silently rewrite the basis of every stored result. Proven end to end: the
+DB test revises a threshold, re-runs, and asserts the original evaluation
+row is byte-for-byte unchanged while the re-run is a new row stamped with
+v2.
+
+**Legal references name the WWAP checklist requirement and are marked
+PENDING VERIFICATION.** Every `legal_reference` cites the checklist
+requirement number — which is the reference we actually have — and says
+plainly that the statutory citation is unconfirmed. Inventing article
+numbers of UAE labour law to fill the column would put fabricated law in
+front of a client, which is the one thing this column must never do. The
+client's legal team supplies the real citations; the column is editable
+for exactly that.
+
+**ACM_TOILET_RATIO's ratios are placeholders and are flagged as such.**
+This prompt named "CD13 2009 thresholds" but not the figures. 1 fixture
+per 8 residents is seeded so the rule is executable, marked PENDING
+VERIFICATION in both the migration and the `legal_reference`. They are
+thresholds precisely so an admin can correct them without a code change,
+and every evaluation is stamped with the ratio it used — so results
+computed under a placeholder are identifiable later. **This needs
+verifying against the published text before any report relies on it.**
+
+**Rule codes decide the module and the requirement.** `R**` maps to an
+Employment Practices requirement whose `sl_no` is the number in the code
+(R11 -> 11, "Timely wage payment"), `ACM_**` to an Accommodation area.
+That mapping is asserted in both the unit tests and the DB test, so a
+future rule can't be seeded against the wrong requirement.
+
+**Inputs no fact key exists for come from the assessor.** Working hours,
+worker-register counts, division lists, fixture counts, vehicle fleets and
+agency lists have no v1 extraction fact key, so they are declared
+`quantitativeKeys` and read from `assessment_items.quantitative`. This is
+the prompt's second permitted input source, and it keeps a rule honest
+about where each number came from — `observed` records what it used.
+
+**Rules that cover "every one of them" accept a list plus the one
+extracted document.** `R19_VEHICLE_REG` and `R08_AGENCY_CLAUSE` merge the
+assessor's list with the single document the model read, and refuse to
+return a pass when part of that list was unreadable — the unreadable
+entry might be the expired vehicle. That case is `insufficient_data` with
+the reason stated, not a pass with a caveat.
+
+**Division by zero is `insufficient_data`, not a pass or a fail.** An
+empty room has no area *per resident*; a zero worker register has no
+coverage ratio. These return `insufficient_data` with the reason spelled
+out and no missing keys, since the figure was supplied — it just doesn't
+support the arithmetic.
+
+**100% coverage on the rule functions is a gate, not a claim.**
+`npm run test:coverage` runs the module with v8 coverage at 100%
+thresholds for statements, branches, functions and lines. It was verified
+to fail by planting an untested branch. Adapters and the server action are
+excluded — they are `server-only` I/O that cannot load in plain Vitest,
+and the adapter is proven against real Postgres by
+`tests/db/rule-engine.test.ts` instead. Coverage is not measured across
+the rest of the codebase, where the tests that matter are behavioural.
+
+**Boundary cases are tested explicitly, as named tests.** Exactly 4.00 m²
+per resident passes; exactly 8 residents passes; a transfer on the 15th
+passes; a certificate expiring *on* the assessment date fails (it does not
+cover that date). Each is its own test with the boundary in the title, so
+a future change that moves one of them fails loudly rather than quietly.

@@ -42,6 +42,7 @@ const MIGRATION_FILES = [
   "supabase/migrations/0019_extraction_jobs.sql",
   "supabase/migrations/0020_claim_extraction_job.sql",
   "supabase/migrations/0021_fact_ledger.sql",
+  "supabase/migrations/0022_rule_engine.sql",
 ];
 
 /**

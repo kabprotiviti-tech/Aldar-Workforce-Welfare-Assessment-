@@ -11,6 +11,12 @@ export const ruleDefinitionRowSchema = z.object({
   threshold: z.unknown().nullable(),
   legal_reference: z.string().nullable(),
   active: z.boolean(),
+  /** 0022_rule_engine.sql — an edit supersedes with a new version rather than mutating; at most one version per code is active. */
+  version: z.number().int(),
+  title: z.string().nullable(),
+  explanation_template: z.string().nullable(),
+  /** The assessor-entered fields this rule reads, alongside input_fact_keys (read from fact_ledger_confirmed). */
+  quantitative_keys: z.array(z.string()),
   created_at: timestampSchema,
   updated_at: timestampSchema,
   created_by: uuidSchema.nullable(),
@@ -21,14 +27,30 @@ export type RuleDefinitionRow = z.infer<typeof ruleDefinitionRowSchema>;
 export const ruleEvaluationResultSchema = z.enum(["pass", "fail", "insufficient_data"]);
 export type RuleEvaluationResult = z.infer<typeof ruleEvaluationResultSchema>;
 
-/** One run of the rule engine. Append-only — a re-evaluation is a new row. */
+/**
+ * One run of the rule engine. Append-only — a re-evaluation is a new row.
+ *
+ * 0022_rule_engine.sql adds the stamps that make a stored result
+ * reproducible on its own: which definition version produced it, the
+ * thresholds and citation it was computed against, what it observed, and
+ * — for insufficient_data — which inputs were missing.
+ */
 export const ruleEvaluationRowSchema = z.object({
   id: uuidSchema,
   assessment_item_id: uuidSchema,
   rule_code: z.string(),
+  rule_definition_id: uuidSchema.nullable(),
+  rule_version: z.number().int().nullable(),
+  /** Which specific room, vehicle or agreement this run was about. Null when the rule evaluates the item as a whole. */
+  subject_ref: z.string().nullable(),
   inputs: z.unknown(),
+  observed: z.unknown().nullable(),
+  thresholds: z.unknown().nullable(),
+  legal_reference: z.string().nullable(),
   result: ruleEvaluationResultSchema,
   computed_explanation: z.string().nullable(),
+  missing_fact_keys: z.array(z.string()),
+  evaluated_by: uuidSchema.nullable(),
   evaluated_at: timestampSchema,
 });
 export type RuleEvaluationRow = z.infer<typeof ruleEvaluationRowSchema>;

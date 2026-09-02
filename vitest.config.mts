@@ -16,5 +16,31 @@ export default defineConfig({
     // parallel races them against each other. The suite is small enough
     // that serial execution costs nothing worth trading correctness for.
     fileParallelism: false,
+    /**
+     * Scoped to the compliance rule engine, which is the one module with
+     * a stated coverage requirement: "100% unit test coverage on the rule
+     * functions, including boundary cases". The thresholds below make
+     * that a gate rather than a claim — `npm run test:coverage` fails if
+     * a new branch in a rule ever ships untested. Coverage isn't measured
+     * across the rest of the codebase, where the tests that matter are
+     * behavioural (RLS, the fact ledger view, the extraction pipeline)
+     * rather than line-counted.
+     */
+    coverage: {
+      provider: "v8",
+      include: ["lib/rules/compliance/**/*.ts"],
+      exclude: [
+        "lib/rules/compliance/**/*.test.ts",
+        // The Supabase adapter and the server action are "server-only"
+        // I/O wiring, not logic — neither can even load in plain Vitest,
+        // and the adapter is proven against real Postgres by
+        // tests/db/rule-engine.test.ts. The coverage requirement is on
+        // the rule functions.
+        "lib/rules/compliance/**/*-supabase.ts",
+        "lib/rules/compliance/actions.ts",
+      ],
+      reporter: ["text"],
+      thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
+    },
   },
 });

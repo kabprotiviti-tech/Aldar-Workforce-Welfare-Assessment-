@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run lib/rules/compliance --coverage",
     "postbuild": "node scripts/check-client-bundle.mjs",
     "seed": "tsx scripts/seed.ts"
   },
@@ -29,6 +30,7 @@
     "@types/pg": "8.23.1",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "10.4.19",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",

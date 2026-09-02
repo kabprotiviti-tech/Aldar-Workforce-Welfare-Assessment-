@@ -323,6 +323,37 @@ Site photos tied to an assessment and (optionally) a specific
 requirement/area, with geolocation and an optional link to the extraction
 that analysed it (`analysis_id`).
 
+### rule_definitions (0022_rule_engine.sql)
+`version` makes a definition a *version* rather than a mutable row: an
+admin edit supersedes with `version + 1` and deactivates the old one
+(`lib/rules/compliance/actions.ts`), and a partial unique index allows
+only one active version per `code`. A definition an evaluation already
+points at is immutable except for `active`, enforced by the
+`rule_definitions_immutable_once_used` trigger — the same reasoning as
+0009's template immutability: a stored result must keep meaning what it
+meant. `title`, `explanation_template` and `quantitative_keys` record the
+rest of the rule's declared shape alongside `input_fact_keys` and
+`threshold`.
+
+Version 1 of all 13 v1 rules is seeded, with `requirement_id` resolved by
+`(module, sl_no)` against the active template — the rule codes follow the
+checklist's own numbering (`R11_WAGE_DATE` -> requirement 11, "Timely
+wage payment"; `ACM_*` -> an Accommodation area). Seeded thresholds
+duplicate the defaults declared in `lib/rules/compliance/rules/`, and
+`tests/db/rule-engine.test.ts` fails if the two ever drift.
+
+### rule_evaluations (0022_rule_engine.sql)
+Stamped with everything needed to reproduce a result from the row alone:
+`rule_definition_id` and `rule_version` (which version produced it),
+`thresholds` and `legal_reference` (what it was computed against),
+`observed` (the values the arithmetic ran on) alongside `inputs` (what was
+available), and `missing_fact_keys` (which inputs were absent, for an
+`insufficient_data` result). `subject_ref` distinguishes repeated runs of
+one rule for one requirement — room "A-101", vehicle "AD-12345".
+
+Evaluations are stored, never recomputed on read, so revising a threshold
+cannot change what a past report said.
+
 ## Findings and reports
 The two things CONTEXT.md says a client_viewer may see.
 
