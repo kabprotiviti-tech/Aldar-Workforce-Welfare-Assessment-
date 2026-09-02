@@ -16,7 +16,7 @@ const adminPool = new Pool({ connectionString: ADMIN_DATABASE_URL });
 const reachable = await isReachable(adminPool);
 
 if (!reachable) {
-  // eslint-disable-next-line no-console
+   
   console.warn(
     `Skipping audit_log RLS test — no Postgres reachable at ${ADMIN_DATABASE_URL}. ` +
       "Set TEST_DATABASE_URL to point at one to run it.",

@@ -83,6 +83,83 @@
   --shadow-float: 0 10px 24px -8px rgb(0 0 0 / 0.55);
 }
 
+/*
+  --- Product design system (app shell + component library) ---
+  A second, separate token namespace ("ds-" — design system) from the
+  marketing microsite's "Field record" tokens above. Light mode only, one
+  definition, no [data-theme] variants — see docs/decisions.md for why
+  these coexist rather than replacing the marketing site's tokens, and for
+  the verified WCAG AA contrast numbers behind every value below.
+
+  ink-3 clears AA only at large-text size (3.37:1, not 4.5:1) — restricted
+  to large numerals / non-text use, never small body or label text.
+*/
+:root {
+  --ds-bg: #f6f5f2;
+  --ds-surface: #ffffff;
+  --ds-surface-2: #fbfaf8;
+  --ds-ink: #16222e;
+  --ds-ink-2: #43535f;
+  --ds-ink-3: #7a8792;
+  --ds-line: #e2e0da;
+  --ds-accent: #16736c;
+  --ds-accent-2: #0f5a54;
+  --ds-accent-soft: #e6f0ee;
+  --ds-ok: #2c6e58;
+  --ds-warn: #95661a;
+  --ds-bad: #9e3b33;
+  --ds-info: #3a5c83;
+
+  --ds-radius-card: 10px;
+  --ds-radius-control: 6px;
+
+  /* Exactly two shadow levels, per the brief — nothing else in the
+     product design system casts a shadow. */
+  --ds-shadow-1: 0 1px 2px rgb(22 34 46 / 0.06), 0 1px 1px rgb(22 34 46 / 0.04);
+  --ds-shadow-2: 0 8px 24px -8px rgb(22 34 46 / 0.18), 0 2px 8px rgb(22 34 46 / 0.08);
+}
+
+.ds-focus-ring:focus-visible {
+  outline: 2px solid var(--ds-accent);
+  outline-offset: 2px;
+}
+
+/* Pill/status badge soft tones — color-mix() against the token, never a
+   literal hex, so ok/warn/bad/info each get a tint without a second set
+   of "-soft" tokens for four colors that only needed one shade each. */
+.ds-pill-neutral {
+  background: var(--ds-surface-2);
+  color: var(--ds-ink-2);
+  border-color: var(--ds-line);
+}
+.ds-pill-ok {
+  background: color-mix(in srgb, var(--ds-ok) 12%, white);
+  color: var(--ds-ok);
+  border-color: color-mix(in srgb, var(--ds-ok) 28%, white);
+}
+.ds-pill-warn {
+  background: color-mix(in srgb, var(--ds-warn) 12%, white);
+  color: var(--ds-warn);
+  border-color: color-mix(in srgb, var(--ds-warn) 28%, white);
+}
+.ds-pill-bad {
+  background: color-mix(in srgb, var(--ds-bad) 12%, white);
+  color: var(--ds-bad);
+  border-color: color-mix(in srgb, var(--ds-bad) 28%, white);
+}
+.ds-pill-info {
+  background: color-mix(in srgb, var(--ds-info) 12%, white);
+  color: var(--ds-info);
+  border-color: color-mix(in srgb, var(--ds-info) 28%, white);
+}
+
+/* Drawer backdrop. Not a Tailwind opacity modifier (bg-ds-ink/40) on
+   purpose: that only produces valid CSS when the underlying color is a
+   channel-format custom property, and ours holds a hex string. */
+.ds-overlay {
+  background: color-mix(in srgb, var(--ds-ink) 40%, transparent);
+}
+
 :root[data-theme="high-contrast"] {
   --bg: #ffffff;
   --surface: #ffffff;

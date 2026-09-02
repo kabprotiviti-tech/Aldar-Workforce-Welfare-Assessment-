@@ -17,15 +17,37 @@ const config: Config = {
         "not-compliant": "var(--not-compliant)",
         "not-applicable": "var(--not-applicable)",
         overlay: "var(--overlay)",
+
+        // Product design system ("ds-" namespace) — see docs/decisions.md
+        // for why this coexists with the marketing tokens above instead
+        // of replacing them.
+        "ds-bg": "var(--ds-bg)",
+        "ds-surface": "var(--ds-surface)",
+        "ds-surface-2": "var(--ds-surface-2)",
+        "ds-ink": "var(--ds-ink)",
+        "ds-ink-2": "var(--ds-ink-2)",
+        "ds-ink-3": "var(--ds-ink-3)",
+        "ds-line": "var(--ds-line)",
+        "ds-accent": "var(--ds-accent)",
+        "ds-accent-2": "var(--ds-accent-2)",
+        "ds-accent-soft": "var(--ds-accent-soft)",
+        "ds-ok": "var(--ds-ok)",
+        "ds-warn": "var(--ds-warn)",
+        "ds-bad": "var(--ds-bad)",
+        "ds-info": "var(--ds-info)",
       },
       borderRadius: {
         control: "var(--radius)",
+        "ds-card": "var(--ds-radius-card)",
+        "ds-control": "var(--ds-radius-control)",
       },
       borderWidth: {
         hairline: "var(--hairline-width)",
       },
       boxShadow: {
         float: "var(--shadow-float)",
+        "ds-1": "var(--ds-shadow-1)",
+        "ds-2": "var(--ds-shadow-2)",
       },
       fontFamily: {
         sans: ["var(--font-plex-sans)", "Helvetica Neue", "Arial", "sans-serif"],

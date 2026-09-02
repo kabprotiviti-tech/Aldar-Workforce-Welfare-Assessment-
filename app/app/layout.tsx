@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { signOut } from "@/lib/auth/actions";
+import { AppShell } from "@/components/shell/app-shell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient();
@@ -10,17 +10,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/sign-in");
   }
 
-  return (
-    <div className="min-h-screen bg-bg">
-      <header className="flex items-center justify-between border-b border-hairline bg-surface px-6 py-3">
-        <span className="text-sm font-semibold text-ink">WWAP</span>
-        <form action={signOut}>
-          <button type="submit" className="text-sm text-ink-secondary hover:text-ink">
-            Sign out
-          </button>
-        </form>
-      </header>
-      <main>{children}</main>
-    </div>
-  );
+  const { data: cycles } = await supabase
+    .from("cycles")
+    .select("id, name")
+    .order("year", { ascending: false });
+
+  return <AppShell cycles={cycles ?? []}>{children}</AppShell>;
 }

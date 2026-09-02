@@ -14,8 +14,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>("paper");
 
   useEffect(() => {
+    // One-time sync from an external system (the DOM attribute
+    // theme-script.tsx set before hydration, to avoid a flash of the
+    // wrong theme) into React state. Can't compute this in a lazy
+    // useState initializer instead — `document` doesn't exist during
+    // this component's server render.
     const current = document.documentElement.getAttribute("data-theme");
     if (isTheme(current)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setThemeState(current);
     }
   }, []);

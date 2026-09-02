@@ -446,3 +446,69 @@ not something to approximate. `requirements.detail_text` is seeded
 `null` throughout; `questions` has zero rows for the Accommodation
 template. Asked the user to paste both, and to confirm or correct the
 quantitative-field mapping above, rather than guessing further.
+
+## Design system and app shell
+
+**A second, `ds`-prefixed token namespace, coexisting with the marketing
+site's tokens rather than replacing them.** The brief gives a fixed light-mode
+palette (`bg`/`surface`/`ink`/`accent`/etc.) for the product app. The
+marketing microsite already has its own token set (unprefixed —
+`--bg`, `--ink`, and so on) from the earlier "Field record" direction, which
+was explicitly scoped as "the one place to spend visual boldness... its own
+layout," separate from the app. Reusing those names for the app's tokens
+would mean either the app inherits marketing's boldness or the marketing
+site gets quietly restyled to the app's calmer palette — neither was asked
+for. Defined the new palette as `--ds-bg`, `--ds-surface`, `--ds-ink`, etc.
+in `app/globals.css`, wired through `tailwind.config.ts` as `ds-*` color/
+radius/shadow utilities, and built every new component and route
+(`components/ds/`, `components/shell/`, `app/gallery`, `app/app/*`) against
+only that namespace. The marketing routes are untouched.
+
+**`ink-3` (#7A8792) is real but restricted, and ends up unused.** Checked
+every token's contrast computationally (relative-luminance script, not
+assumption) rather than trusting the brief's hex values are AA by
+construction. `ink-3` on `bg` and on `surface` comes out to 3.37:1 and
+3.68:1 — short of the 4.5:1 normal-text threshold, only clearing the 3:1
+large-text/non-text one. Caught two accidental uses of it on genuinely
+small text while building — the nav's "Assessment Programmes" group label
+and the Field/Textarea placeholder color — and moved both to `ink-2`
+(6.1:1+). No component ended up with a legitimate large-text-only use case,
+so `ink-3` stays defined (the brief names it explicitly) but unused rather
+than forced into a spot where it would fail AA.
+
+**`color-mix()` instead of Tailwind's opacity modifier for tinted
+surfaces.** Tailwind's `bg-x/40` opacity syntax only produces valid CSS when
+the underlying custom property holds an RGB channel triplet (`16 34 46`);
+every `ds-*` token is a plain hex string, so that modifier would silently
+emit `rgb(var(--ds-x) / 0.4)` — invalid, and not visibly broken until
+inspected. Used `color-mix(in srgb, var(--ds-x) N%, white|transparent)`
+dedicated classes instead: `.ds-pill-*` (12%/28% tints for the five status
+tones) and `.ds-overlay` (40% ink-over-transparent for the Drawer backdrop).
+
+**ESLint pinned to 9.39.5, not the newly-released 10.x.** Next.js 16 removed
+the `next lint` subcommand entirely, so the no-hardcoded-hex requirement
+needed a real standalone ESLint setup regardless. `eslint-config-next`'s
+bundled `eslint-plugin-react` 7.37.5 calls `context.getFilename()`, an API
+ESLint 10 removed — every lint run crashed with
+`contextOrFilename.getFilename is not a function`, not a peer-range
+warning. Pinned `eslint` to 9.39.5 (the last major line these bundled
+plugins fully support) instead of patching or forking the plugin.
+`eslint.config.mjs` spreads `eslint-config-next`'s default export directly
+(`...nextConfig`) — it's a plain array, not a factory function, despite the
+common `require("eslint-config-next")()` pattern seen elsewhere — and adds a
+local `no-hardcoded-hex` rule (flags any hex-color literal or template
+fragment) scoped to exclude `.next/`, migrations, and generated files.
+Verified the rule isn't a no-op by deliberately committing a violation to a
+throwaway file and confirming ESLint caught it before deleting the file.
+
+**Quality floor verified computationally, not assumed:** contrast via the
+script above; 380px responsiveness and the mobile nav Drawer via Playwright
+screenshots at that exact width (`document.body.scrollWidth` equals the
+viewport width — no page-level horizontal scroll; the Table's own
+`overflow-x-auto` is the only intentional scroll container); keyboard
+navigation and focus-ring visibility via a Playwright script that repeatedly
+presses Tab and reads `document.activeElement`'s computed `outline` (lands
+on a 2px solid `--ds-accent` outline, 2px offset, matching `.ds-focus-ring`);
+`prefers-reduced-motion` is handled by a pre-existing global rule
+(`*, *::before, *::after { animation-duration: 0.001ms !important; ... }`)
+that automatically covers every new component with no per-component work.

@@ -16,7 +16,7 @@ const pool = new Pool({ connectionString: ADMIN_DATABASE_URL });
 const reachable = await isReachable(pool);
 
 if (!reachable) {
-  // eslint-disable-next-line no-console
+   
   console.warn(`Skipping template immutability test — no Postgres reachable at ${ADMIN_DATABASE_URL}.`);
 }
 

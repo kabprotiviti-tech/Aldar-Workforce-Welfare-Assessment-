@@ -27,7 +27,7 @@ const pool = new Pool({ connectionString: ADMIN_DATABASE_URL });
 const reachable = await isReachable(pool);
 
 if (!reachable) {
-  // eslint-disable-next-line no-console
+   
   console.warn(`Skipping seed idempotency test — no Postgres reachable at ${ADMIN_DATABASE_URL}.`);
 }
 
