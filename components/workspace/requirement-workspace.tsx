@@ -207,8 +207,8 @@ export function RequirementWorkspace() {
         <ShortcutsPanel />
       </div>}
 
-      <div className="mt-6 max-h-[60vh] overflow-y-auto border border-hairline">
-        <table className="w-full text-left text-sm">
+      <div className="mt-6 max-h-[60vh] overflow-auto border border-hairline">
+        <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="sticky top-0 bg-surface">
             <tr className="border-b border-hairline text-xs text-ink-secondary">
               <th className="w-14 px-3 py-2 text-right font-medium">No.</th>

@@ -67,7 +67,7 @@ export function ReportSample() {
             ))}
           </dl>
 
-          <div className="grid grid-cols-3 gap-px border-t border-hairline bg-hairline">
+          <div className="grid grid-cols-1 gap-px border-t border-hairline bg-hairline sm:grid-cols-3">
             {SUMMARY.map(([label, value, isNumeral]) => (
               <div key={label} className="bg-surface px-4 py-3">
                 <dt className="text-xs text-ink-secondary">{label}</dt>

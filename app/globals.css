@@ -180,6 +180,19 @@ h4 {
   transform-origin: left;
   animation: trace-line var(--dur-hero) var(--ease) forwards;
 }
+@keyframes trace-line-vertical {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.hero-trace-line-vertical {
+  transform: scaleY(0);
+  transform-origin: top;
+  animation: trace-line-vertical var(--dur-hero) var(--ease) forwards;
+}
 .hero-trace-dot {
   animation: trace-dot var(--dur-micro) var(--ease) forwards;
 }
