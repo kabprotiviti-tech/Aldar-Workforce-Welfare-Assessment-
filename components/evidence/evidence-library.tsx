@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import {
@@ -17,6 +17,8 @@ import { computeCoverage, requirementsWithNoEvidence } from "@/lib/evidence/cove
 import { Tabs } from "@/components/ds/tabs";
 import { Pill, type PillTone } from "@/components/ds/pill";
 import { EmptyState } from "@/components/ds/empty-state";
+import { Button } from "@/components/ds/button";
+import { ProgressBar } from "@/components/ds/progress-bar";
 import { EvidencePreview } from "@/components/evidence/evidence-preview";
 
 export interface EvidenceFileData {
@@ -41,6 +43,14 @@ export interface LinkData {
   requirementId: string;
 }
 
+/** The most recent extraction attempt for one evidence file, if any. */
+export interface ExtractionSummaryData {
+  evidenceFileId: string;
+  costUsd: number | null;
+  error: string | null;
+  factCount: number;
+}
+
 export interface EvidenceLibraryProps {
   assessmentId: string;
   subjectCode: string;
@@ -48,6 +58,77 @@ export interface EvidenceLibraryProps {
   requirements: RequirementData[];
   files: EvidenceFileData[];
   links: LinkData[];
+  extractions: ExtractionSummaryData[];
+}
+
+interface BatchProgressState {
+  batchId: string;
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  done: boolean;
+}
+
+function formatCost(costUsd: number): string {
+  return `$${costUsd.toFixed(costUsd < 0.01 ? 6 : 4)}`;
+}
+
+/** Starts a batch extraction (POST /api/ai/batches) and polls its progress (GET /api/ai/batches/[id]) until done. */
+function useExtractionBatch(assessmentId: string, onDone: () => void) {
+  const [batch, setBatch] = useState<BatchProgressState | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  function pollBatch(batchId: string) {
+    pollRef.current = setInterval(async () => {
+      const response = await fetch(`/api/ai/batches/${batchId}`);
+      if (!response.ok) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        return;
+      }
+      const body = await response.json();
+      setBatch({
+        batchId,
+        total: body.total,
+        queued: body.queued,
+        running: body.running,
+        succeeded: body.succeeded,
+        failed: body.failed,
+        done: body.done,
+      });
+      if (body.done) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        onDone();
+      }
+    }, 2000);
+  }
+
+  async function start(evidenceFileIds: string[]) {
+    setStartError(null);
+    const response = await fetch("/api/ai/batches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assessmentId, evidenceFileIds }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      setStartError(body.error ?? "Could not start extraction.");
+      return;
+    }
+    setBatch({ batchId: body.batchId, total: body.jobCount, queued: body.jobCount, running: 0, succeeded: 0, failed: 0, done: false });
+    pollBatch(body.batchId);
+  }
+
+  const extracting = batch !== null && !batch.done;
+  return { batch, extracting, startError, start };
 }
 
 const REVIEW_STATUS_TONE: Record<string, PillTone> = {
@@ -62,14 +143,16 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-export function EvidenceLibrary({ assessmentId, subjectCode, entityName, requirements, files, links }: EvidenceLibraryProps) {
+export function EvidenceLibrary({ assessmentId, subjectCode, entityName, requirements, files, links, extractions }: EvidenceLibraryProps) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(files[0]?.id ?? null);
   const [uploading, setUploading] = useState(false);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const { batch, extracting, startError, start } = useExtractionBatch(assessmentId, () => router.refresh());
 
   const selectedFile = files.find((f) => f.id === selectedId) ?? null;
   const linkedRequirementIds = new Set(links.filter((l) => l.evidenceFileId === selectedId).map((l) => l.requirementId));
+  const extractionByFile = new Map(extractions.map((e) => [e.evidenceFileId, e]));
 
   async function handleFiles(fileList: FileList) {
     setUploadErrors([]);
@@ -150,6 +233,11 @@ export function EvidenceLibrary({ assessmentId, subjectCode, entityName, require
                 onFiles={handleFiles}
                 linkedRequirementIds={linkedRequirementIds}
                 router={router}
+                extractionByFile={extractionByFile}
+                batch={batch}
+                extracting={extracting}
+                startError={startError}
+                onExtract={start}
               />
             ),
           },
@@ -176,6 +264,11 @@ function ThreePanelLibrary({
   onFiles,
   linkedRequirementIds,
   router,
+  extractionByFile,
+  batch,
+  extracting,
+  startError,
+  onExtract,
 }: {
   assessmentId: string;
   files: EvidenceFileData[];
@@ -188,6 +281,11 @@ function ThreePanelLibrary({
   onFiles: (files: FileList) => void;
   linkedRequirementIds: Set<string>;
   router: ReturnType<typeof useRouter>;
+  extractionByFile: Map<string, ExtractionSummaryData>;
+  batch: BatchProgressState | null;
+  extracting: boolean;
+  startError: string | null;
+  onExtract: (evidenceFileIds: string[]) => void;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_1fr_260px]">
@@ -217,38 +315,90 @@ function ThreePanelLibrary({
           </div>
         )}
 
+        {files.length > 0 && (
+          <Button
+            variant="secondary"
+            className="mt-3 w-full"
+            disabled={extracting}
+            onClick={() => onExtract(files.map((f) => f.id))}
+          >
+            {extracting ? "Extracting…" : "Extract all"}
+          </Button>
+        )}
+
+        {batch && (
+          <ProgressBar
+            className="mt-2"
+            label={batch.done ? `Extraction complete — ${batch.succeeded} succeeded, ${batch.failed} failed` : `Extracting ${batch.succeeded + batch.failed} of ${batch.total}…`}
+            value={batch.total === 0 ? 0 : Math.round(((batch.succeeded + batch.failed) / batch.total) * 100)}
+          />
+        )}
+
+        {startError && <p className="mt-2 text-xs text-ds-bad">{startError}</p>}
+
         <div className="mt-3 grid gap-1.5">
           {files.length === 0 ? (
             <p className="text-sm text-ds-ink-2">No files uploaded yet.</p>
           ) : (
-            files.map((file) => (
-              <button
-                key={file.id}
-                type="button"
-                onClick={() => onSelect(file.id)}
-                className={`ds-focus-ring rounded-ds-control border px-3 py-2 text-left text-sm transition-colors duration-150 ${
-                  file.id === selectedId
-                    ? "border-ds-accent bg-ds-accent-soft"
-                    : "border-ds-line bg-ds-surface hover:border-ds-accent"
-                }`}
-              >
-                <p className="truncate font-medium text-ds-ink">{file.originalName}</p>
-                <p className="mt-0.5 text-xs text-ds-ink-2">
-                  {file.documentClass ? DOCUMENT_CLASS_LABELS[file.documentClass as keyof typeof DOCUMENT_CLASS_LABELS] ?? file.documentClass : "Unclassified"}
-                  {" · "}
-                  {new Date(file.uploadedAt).toLocaleDateString()}
-                </p>
-                <Pill tone={REVIEW_STATUS_TONE[file.reviewStatus] ?? "neutral"} className="mt-1.5">
-                  {REVIEW_STATUS_LABELS[file.reviewStatus as keyof typeof REVIEW_STATUS_LABELS] ?? file.reviewStatus}
-                </Pill>
-              </button>
-            ))
+            files.map((file) => {
+              const extraction = extractionByFile.get(file.id);
+              return (
+                <button
+                  key={file.id}
+                  type="button"
+                  onClick={() => onSelect(file.id)}
+                  className={`ds-focus-ring rounded-ds-control border px-3 py-2 text-left text-sm transition-colors duration-150 ${
+                    file.id === selectedId
+                      ? "border-ds-accent bg-ds-accent-soft"
+                      : "border-ds-line bg-ds-surface hover:border-ds-accent"
+                  }`}
+                >
+                  <p className="truncate font-medium text-ds-ink">{file.originalName}</p>
+                  <p className="mt-0.5 text-xs text-ds-ink-2">
+                    {file.documentClass ? DOCUMENT_CLASS_LABELS[file.documentClass as keyof typeof DOCUMENT_CLASS_LABELS] ?? file.documentClass : "Unclassified"}
+                    {" · "}
+                    {new Date(file.uploadedAt).toLocaleDateString()}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <Pill tone={REVIEW_STATUS_TONE[file.reviewStatus] ?? "neutral"}>
+                      {REVIEW_STATUS_LABELS[file.reviewStatus as keyof typeof REVIEW_STATUS_LABELS] ?? file.reviewStatus}
+                    </Pill>
+                    {extraction?.error && <Pill tone="bad">Extraction failed</Pill>}
+                    {!extraction?.error && extraction?.costUsd != null && <Pill tone="info">{formatCost(extraction.costUsd)}</Pill>}
+                  </div>
+                </button>
+              );
+            })
           )}
         </div>
       </div>
 
       <div>
         <EvidencePreview file={selectedFile ? { storagePath: selectedFile.storagePath, originalName: selectedFile.originalName, mimeType: selectedFile.mimeType } : null} />
+
+        {selectedFile && (
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-ds-control border border-ds-line bg-ds-surface-2 px-3 py-2.5">
+            <div className="text-sm">
+              {(() => {
+                const extraction = extractionByFile.get(selectedFile.id);
+                if (extraction?.error) {
+                  return <p className="text-ds-bad">Extraction failed, review manually.</p>;
+                }
+                if (extraction?.costUsd != null) {
+                  return (
+                    <p className="text-ds-ink-2">
+                      {extraction.factCount} fact{extraction.factCount === 1 ? "" : "s"} extracted &middot; {formatCost(extraction.costUsd)}
+                    </p>
+                  );
+                }
+                return <p className="text-ds-ink-2">Not extracted yet.</p>;
+              })()}
+            </div>
+            <Button variant="secondary" disabled={extracting} onClick={() => onExtract([selectedFile.id])}>
+              {extracting ? "Extracting…" : "Extract facts"}
+            </Button>
+          </div>
+        )}
 
         {selectedFile && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">

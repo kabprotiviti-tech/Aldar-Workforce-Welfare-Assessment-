@@ -86,6 +86,13 @@ export type ExtractionRow = z.infer<typeof extractionRowSchema>;
 export const extractedFactStatusSchema = z.enum(["proposed", "accepted", "edited", "rejected"]);
 export type ExtractedFactStatus = z.infer<typeof extractedFactStatusSchema>;
 
+/** 0018_extracted_facts_shape.sql — the document extraction service's fixed confidence vocabulary. */
+export const factConfidenceSchema = z.enum(["high", "medium", "low"]);
+export type FactConfidence = z.infer<typeof factConfidenceSchema>;
+
+export const factAbsenceReasonSchema = z.enum(["not_present", "illegible"]);
+export type FactAbsenceReason = z.infer<typeof factAbsenceReasonSchema>;
+
 export const extractedFactRowSchema = z.object({
   id: uuidSchema,
   extraction_id: uuidSchema,
@@ -94,9 +101,15 @@ export const extractedFactRowSchema = z.object({
   value_text: z.string().nullable(),
   value_number: z.number().nullable(),
   value_date: dateSchema.nullable(),
+  value_boolean: z.boolean().nullable(),
+  /** List-valued facts (e.g. payroll_deduction_types) — the one shape the other four value_* columns don't cover. */
+  value_json: z.unknown().nullable(),
   unit: z.string().nullable(),
   page_ref: z.string().nullable(),
-  confidence: z.number().nullable(),
+  verbatim_quote: z.string().nullable(),
+  confidence: factConfidenceSchema.nullable(),
+  /** Set exactly when every value_* column is null — this prompt's {"value": null, "reason": "not_present" | "illegible"} contract. */
+  reason: factAbsenceReasonSchema.nullable(),
   status: extractedFactStatusSchema,
   resolved_by: uuidSchema.nullable(),
   resolved_at: timestampSchema.nullable(),

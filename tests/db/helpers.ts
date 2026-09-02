@@ -38,6 +38,9 @@ const MIGRATION_FILES = [
   // storage.buckets/storage.objects, which only exist in a real Supabase
   // project, not this local Postgres stand-in. See docs/decisions.md.
   "supabase/migrations/0017_evidence_review_and_requirements.sql",
+  "supabase/migrations/0018_extracted_facts_shape.sql",
+  "supabase/migrations/0019_extraction_jobs.sql",
+  "supabase/migrations/0020_claim_extraction_job.sql",
 ];
 
 /**

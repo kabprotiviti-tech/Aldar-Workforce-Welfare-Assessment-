@@ -39,10 +39,29 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
   ]);
 
   const fileIds = (files ?? []).map((f) => f.id);
-  const { data: links } =
+  const [{ data: links }, { data: extractions }, { data: facts }] = await Promise.all([
     fileIds.length > 0
-      ? await supabase.from("evidence_file_requirements").select("evidence_file_id, requirement_id").in("evidence_file_id", fileIds)
-      : { data: [] as { evidence_file_id: string; requirement_id: string }[] };
+      ? supabase.from("evidence_file_requirements").select("evidence_file_id, requirement_id").in("evidence_file_id", fileIds)
+      : Promise.resolve({ data: [] as { evidence_file_id: string; requirement_id: string }[] }),
+    fileIds.length > 0
+      ? supabase.from("extractions").select("evidence_file_id, cost_usd, error, created_at").in("evidence_file_id", fileIds).order("created_at", { ascending: false })
+      : Promise.resolve({ data: [] as { evidence_file_id: string; cost_usd: number | null; error: string | null; created_at: string }[] }),
+    fileIds.length > 0
+      ? supabase.from("extracted_facts").select("evidence_file_id").in("evidence_file_id", fileIds)
+      : Promise.resolve({ data: [] as { evidence_file_id: string }[] }),
+  ]);
+
+  // extractions is ordered newest-first, so the first row seen per file is its latest attempt.
+  const latestExtractionByFile = new Map<string, { costUsd: number | null; error: string | null }>();
+  for (const e of extractions ?? []) {
+    if (!latestExtractionByFile.has(e.evidence_file_id)) {
+      latestExtractionByFile.set(e.evidence_file_id, { costUsd: e.cost_usd, error: e.error });
+    }
+  }
+  const factCountByFile = new Map<string, number>();
+  for (const f of facts ?? []) {
+    factCountByFile.set(f.evidence_file_id, (factCountByFile.get(f.evidence_file_id) ?? 0) + 1);
+  }
 
   return (
     <EvidenceLibrary
@@ -61,6 +80,12 @@ export default async function AssessmentEvidencePage({ params }: { params: Promi
         uploadedAt: f.uploaded_at,
       }))}
       links={(links ?? []).map((l) => ({ evidenceFileId: l.evidence_file_id, requirementId: l.requirement_id }))}
+      extractions={fileIds.map((fileId) => ({
+        evidenceFileId: fileId,
+        costUsd: latestExtractionByFile.get(fileId)?.costUsd ?? null,
+        error: latestExtractionByFile.get(fileId)?.error ?? null,
+        factCount: factCountByFile.get(fileId) ?? 0,
+      }))}
     />
   );
 }

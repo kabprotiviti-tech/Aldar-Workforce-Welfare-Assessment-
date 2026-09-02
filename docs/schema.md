@@ -213,7 +213,10 @@ upload time and never edited.
 One run of the model against one evidence file — what it returned, which
 prompt version, token/cost accounting. Immutable once written: a
 correction doesn't edit an extraction, a human resolving a fact does
-(`extracted_facts.resolved_*`).
+(`extracted_facts.resolved_*`). `error` holds a human-readable reason
+(malformed JSON, a forbidden field, an API failure) when the call didn't
+produce usable facts — the "extraction failed, review manually" case
+(`lib/ai/extract.ts`).
 
 ### extracted_facts
 One proposed value from an extraction, and the human decision on it
@@ -221,10 +224,43 @@ One proposed value from an extraction, and the human decision on it
 a table: nothing here reaches a report without `resolved_by`/`resolved_at`
 being set by a person.
 
+`0018_extracted_facts_shape.sql` widens this table to the document
+extraction service's fact shape (this prompt): `confidence` becomes the
+fixed `high`/`medium`/`low` vocabulary (was `numeric`, from before that
+vocabulary existed); `verbatim_quote` and `reason`
+(`not_present`/`illegible`, set exactly when the model found no value)
+are added; `value_boolean` and `value_json` extend the existing
+typed-column-per-shape pattern (`0005_evidence_ai.sql`) alongside
+`value_text`/`value_number`/`value_date` — `value_json` is the one shape
+those four don't cover (list-valued facts like
+`payroll_deduction_types`). Exactly one `value_*` column (or none, with
+`reason` set) is populated per row; which one is a pure function of the
+model's returned value type (`factToInsert`, `lib/ai/extract.ts`).
+
 ### ai_observations
 Something the model flagged for a human to look at (a gap, something worth
 attention) — never a compliance status, always routed to
 `confirmed`/`rejected`/`noted` by a person (`actioned_by`).
+
+### extraction_jobs
+`0019_extraction_jobs.sql`. The document extraction batch queue (this
+prompt: "a queue so a batch of 18 documents extracts in the background
+with visible progress") — one row per evidence file in a batch,
+`batch_id` grouping the rows one "Extract all" action created so progress
+is a single count query (`lib/ai/queue.ts`'s `getBatchProgress`).
+`status`: `queued` → `running` → `succeeded`/`failed`. Written and read
+only by server code (`lib/ai/queue-supabase.ts`) — like
+`extractions`/`extracted_facts`, nothing about queue mechanics needs an
+authenticated user's own session; the `select` RLS policy exists only so
+the batch-progress route can read it back through the caller's own
+session. `0020_claim_extraction_job.sql` adds
+`claim_next_extraction_job(batch_id)`, a `security definer` function
+doing the claim-and-mark-running step (`FOR UPDATE SKIP LOCKED`) as one
+atomic round trip, so two overlapping workers — the normal batch run and
+the stuck-job sweep retrying it — never claim the same row. The
+`(status, started_at)` index backs the sweep's query for jobs stuck
+`running` past a threshold (`lib/ai/queue-supabase.ts`'s
+`requeueStuckExtractionJobs`, `app/api/ai/sweep-stuck-jobs`).
 
 ## Rules and measurement
 

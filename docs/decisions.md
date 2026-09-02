@@ -840,3 +840,154 @@ short tokens like "wps") doesn't treat an underscore as a boundary — it's
 a `\w` character — so `\bwps\b` alone would silently never match
 "WPS_Report.pdf", the most realistic real-world filename shape. Caught by
 the classifier's own unit tests before shipping, not discovered later.
+
+## Document extraction service
+
+`lib/ai/` (client, prompts, orchestration, queue) plus
+`app/api/ai/*` and the Evidence Library's extraction controls. Sends PDFs
+and images to Claude to extract structured facts — never a compliance
+conclusion, never arithmetic (CONTEXT.md rules 2/3) — with every call
+persisted and every fact fanned out as `proposed`, exactly as CONTEXT.md
+rule 4 already requires for `extracted_facts`.
+
+**The SDK's own retry, not a hand-rolled loop.** "Retry with exponential
+backoff on 429 and 5xx" (this prompt) is exactly what
+`@anthropic-ai/sdk`'s `maxRetries` option already implements — backoff
+with jitter on 408/409/429/5xx and connection errors, documented in the
+SDK itself. `lib/ai/client.ts` sets `maxRetries: 4` and a 120s per-call
+timeout rather than reimplementing that loop; reimplementing it would
+only risk diverging from the SDK's own understanding of which errors are
+retryable.
+
+**Zod bumped 3.23.8 → 3.25.76, not to zod 4.** `@anthropic-ai/sdk`
+declares `zod: "^3.25.0 || ^4.0.0"` as an optional peer. 3.25.76 is the
+last 3.x release, satisfying the SDK without crossing a major version
+against this codebase's extensive existing zod 3 schemas — the full test
+suite (158/158 at the time) passed unchanged after the bump, confirming
+nothing broke.
+
+**App-boundary Zod validation is the primary defense against a malformed
+model response, not Anthropic's structured-output config.** The
+acceptance criterion is "a malformed model response never crashes the
+request... stored with the error and surfaced as 'extraction failed,
+review manually'" — that needs real parsing and validation code with a
+provably-exercised failure path, not an API feature that would reduce
+(without eliminating, or testing) how often malformed responses occur.
+`lib/ai/extract.ts`'s `tryParseModelJson` never throws; a schema
+mismatch, an off-vocabulary `fact_key`, or a `value: null` fact missing
+its `reason` are all caught by `responseSchema.safeParse` and stored as a
+failed extraction, proven by `lib/ai/extract.test.ts`'s "malformed
+responses never crash" suite against six distinct malformed shapes.
+
+**Forbidden fields (`status`/`rating`/`compliant`/`score`) are checked
+recursively against the parsed JSON's *keys*, before schema validation —
+not filtered out of the response afterward.** Silently dropping a
+forbidden field would let a model that tried to sneak in a compliance
+judgment succeed at everything except that one field being invisible;
+rejecting the whole extraction as failed is the only response consistent
+with "the model must never set compliance status" being a hard rule, not
+a preference. Checked against keys, not string values, so a fact whose
+*value* happens to contain the word "status" (e.g. a verbatim quote) is
+never mistaken for the model returning a forbidden field
+(`lib/ai/forbidden-fields.test.ts`).
+
+**`extracted_facts.confidence`/`verbatim_quote`/`reason`/`value_boolean`/
+`value_json` didn't exist when `0005_evidence_ai.sql` first created the
+table** (`confidence` was `numeric`, no fixed vocabulary existed yet).
+`0018_extracted_facts_shape.sql` alters the table in place rather than
+adding a parallel v2 table, safe because no live Supabase project has
+ever run against this schema — the same reasoning already used for
+`0009_template_immutability.sql`'s trigger-based approach and other
+in-place alterations earlier in this session.
+
+**`offer_letter_allowance_value` has no dedicated `document_class`** — it
+is bundled into the `employment_contract` prompt
+(`lib/ai/prompts/employment_contract/v1.ts`), which recognizes either a
+signed contract or an offer letter and reports whichever fact applies.
+The 20 given fact keys map cleanly onto 12 of the 14 document classes;
+inventing a 15th class for one fact key not called for in the brief
+would have been scope creep the brief didn't ask for.
+
+**`worker_register` and `photo` get no v1 prompt at all.** The brief
+gave zero fact keys for either and said "extend later" — fabricating
+plausible-sounding fact keys for them would violate "extract only what
+is present" one level up, inventing facts to extract rather than
+inventing values. `lib/ai/prompts/registry.ts` simply has no entry for
+either; `extractDocument` returns `{outcome: "skipped"}` without ever
+calling the model, and the queue records that as a failed job with a
+clear reason (no separate "skipped" job status exists — see
+`extraction_jobs` in docs/schema.md) rather than crashing or silently
+dropping the document.
+
+**No live `ANTHROPIC_API_KEY` in this sandbox, so the "golden-file" test
+is a fully mocked, deterministic exercise of the real orchestration, not
+a live-API test.** `lib/ai/extract.test.ts` injects a fake `ExtractionDb`
+and a `CallClaudeFn` returning canned per-class JSON fixtures, then runs
+the actual `extractDocument` parsing/validation/fan-out logic against
+them — proving the three fixture documents (`wps_report`,
+`payroll_register`, `insurance_schedule`) produce exactly their expected
+fact keys, and that six distinct malformed-response shapes fail cleanly.
+This is a real gap against "three fixture documents" read literally as
+binary files through a live model call; it is the best verifiable
+substitute available without live credentials, and is a scope limitation
+worth re-testing against the real API once a key is available.
+
+**The extraction queue's atomic claim is a Postgres function
+(`claim_next_extraction_job`, `0020_claim_extraction_job.sql`), not
+application-level locking.** `FOR UPDATE SKIP LOCKED` inside a
+`security definer` function makes "claim the oldest queued job and mark
+it running" a single round trip instead of a read-then-write race across
+two separate PostgREST calls — the real risk being the stuck-job sweep
+re-triggering a batch whose background run is technically still
+in-flight. Proven directly against real Postgres (not mocked) by firing
+two concurrent `claimNextJob` calls in `tests/db/extraction-queue.test.ts`
+and asserting they never return the same job.
+
+**A batch drains sequentially, one document at a time, not in
+parallel.** `lib/ai/queue.ts`'s `runBatch` loops `processNextJob` to
+completion rather than claiming and processing several jobs at once.
+Keeps a single background run (`next/server`'s `after()`) within one
+predictable concurrency budget against the Anthropic API instead of
+needing a separate limiter for up to 18 simultaneous requests — the
+trade is a slower batch, which the UI's progress bar makes visible and
+tolerable, for less complexity and a smaller blast radius if the API
+starts rate-limiting.
+
+**The stuck-job sweep (`app/api/ai/sweep-stuck-jobs`, Vercel Cron every 15
+minutes) requeues *and* re-triggers processing, not just requeues.**
+`next/server`'s `after()` extends a serverless invocation's lifetime only
+for the request that scheduled it — a batch's background run getting
+killed mid-document by a duration limit leaves its job "running" forever
+with nothing left calling `claimNextJob` for that batch. Resetting the
+job's status to `queued` alone would leave it queued forever too; the
+sweep resumes `runExtractionBatch` for every batch it touched, the same
+way starting a batch does. The 10-minute stuck threshold is comfortably
+above `lib/ai/client.ts`'s own 120-second per-call timeout, so a job
+still genuinely in flight is never mistaken for a stuck one.
+
+**Route handlers, not Server Actions, for the batch endpoints.** Server
+Actions in this codebase (`lib/*/actions.ts`) return a result object to
+the calling component; starting a batch needs to return immediately after
+queuing while `next/server`'s `after()` keeps draining it in the
+background, and progress needs to be polled from the client on an
+interval — both are a natural fit for `POST`/`GET` JSON endpoints
+(`app/api/ai/batches`, `app/api/ai/batches/[id]`), not a form-bound
+mutation. Authorization still goes through the same session-scoped
+Supabase client and RLS as every Server Action in this codebase; only the
+queue write itself (no `authenticated` insert grant on `extraction_jobs`,
+matching `extractions`/`extracted_facts`) uses the service-role client,
+after RLS has already confirmed the caller can see the assessment's
+evidence files.
+
+**UI extraction/build verification never exercised a live Supabase
+project, same limitation as every earlier phase in this session.**
+`npx tsc --noEmit`, `eslint`, `npm run build` plus the postbuild secret
+scan, and the full Vitest suite (including the two new DB-backed suites
+against local Postgres) all passed, but the Evidence Library's new
+"Extract facts"/"Extract all" buttons, progress bar, and cost display
+were never clicked through in a browser against a real backend — there
+is no live Supabase project in this sandbox to sign into. The route
+handlers, queue, and extraction orchestration are proven instead by the
+DB-backed queue test (`tests/db/extraction-queue.test.ts`, real Postgres,
+real `claim_next_extraction_job` SQL function) and the mocked
+`extract.test.ts`/`queue.test.ts` suites.
