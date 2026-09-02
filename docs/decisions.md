@@ -512,3 +512,122 @@ on a 2px solid `--ds-accent` outline, 2px offset, matching `.ds-focus-ring`);
 `prefers-reduced-motion` is handled by a pre-existing global rule
 (`*, *::before, *::after { animation-duration: 0.001ms !important; ... }`)
 that automatically covers every new component with no per-component work.
+
+## Entity and assessment management
+
+**Subject-code audit numbers: full audits are whole numbers, a follow-up is
+the whole number below it plus .5 — and the numeric suffix is omitted only
+at audit number 1.** CONTEXT.md's own example sequence "..., 3, 3.5, 4"
+under-specifies the general rule; `lib/scheduling/subject-code.ts`'s
+`nextAuditNumber` reproduces it as `floor(last) + 1` for a full audit and
+`floor(last) + 0.5` for a follow-up, which is the only reading that also
+reconciles CONTEXT.md's two worked examples — the suffixed
+`2023-EP-FU-GLIS-3.5` next to the unsuffixed `2022-ACM-FU-DIC` — as "the
+suffix appears whenever audit_number isn't 1," not "whenever the type is
+FU." A second follow-up requested before the next full audit would
+collide with the first (both `floor(x) + 0.5`); this isn't handled
+specially — it's caught by `assessments.subject_code`'s own unique
+constraint rather than silently mis-numbered, since the brief doesn't
+define what a second consecutive follow-up should be numbered.
+`audit_number` widened from `integer` to `numeric(5,1)`
+(0012_visit_schedule.sql) to hold the `.5`.
+
+**For Accommodation, the subject code's ENTITYCODE component is the
+facility_code, not the entity_code.** Accommodation assessments are
+per-facility (95 facilities/cycle, CONTEXT.md), and a facilities-management
+entity can operate many facilities — using entity_code there would give
+every one of that entity's facilities an identical, colliding subject
+code. Employment Practices/Onboarding (entity-level, no facility) use
+entity_code as before.
+
+**Three visit dates, not two.** The brief distinguishes a proposed date
+(the consultancy's initial offer), a confirmed date (once agreed — may
+differ from the proposal), and the actual visit date (may differ again,
+e.g. a reschedule) — three genuinely different facts, only two of which
+0004_assessments.sql had a column for. `planned_visit_date` is renamed to
+`proposed_visit_date` and `confirmed_visit_date` is added
+(0012_visit_schedule.sql); `report_due_date` is computed only from
+`actual_visit_date`, the one date that's actually knowable to have
+happened.
+
+**permission_required is copied onto the assessment at generation time,
+not read live from the facility.** A specific visit's permission status is
+a scheduling fact about that visit; if a facility's own
+`access_permission_required` flag is corrected later, that shouldn't
+silently rewrite the permission status of a visit already being
+scheduled. The access letter itself reuses `evidence_files` (with
+`document_class = 'access_letter'`) rather than a dedicated column/table —
+it's an uploaded document like any other evidence, and the schema already
+has a place for exactly that. Uploading it requires a Storage bucket named
+`evidence` to exist in the Supabase project (created once via the
+dashboard, or a project-specific storage migration this repo doesn't have
+— the local Postgres test harness has no `storage` schema to migrate
+against, so this path is exercised by type-checking and build only, not a
+DB test, the same limitation every other Supabase-only feature in this
+repo has without a live project).
+
+**UAE working week: Saturday/Sunday weekend, not the older Sunday-Thursday
+week.** The brief says "UAE working week" without specifics. The UAE
+government moved to a Monday-Friday workweek (Friday counted as a working
+day for deadline purposes) in January 2022; `lib/scheduling/working-days.ts`
+uses that, current, calendar. `public_holidays` (0013_public_holidays.sql)
+is seeded with only the fixed-Gregorian-date holidays (New Year's Day,
+Commemoration Day, National Day) — the Islamic-calendar ones (Eid al-Fitr,
+Eid al-Adha, Islamic New Year, Prophet Muhammad's Birthday) are set by moon
+sighting and officially announced only shortly beforehand, so guessing
+exact future dates for them would be inventing content the same way this
+session has refused to invent regulatory clause text elsewhere. That's
+exactly why the table is admin-editable in Settings rather than a
+hard-coded constant.
+
+**report_due_date is computed once, at the moment actual_visit_date is
+recorded, against the holiday calendar as it exists then.** "Stored, not
+calculated on read" (this prompt) applies to the holiday table too, not
+just the arithmetic: a holiday added to Settings afterward does not
+retroactively change a deadline already stored.
+
+**generateAssessmentSet is built as a small, explicit port
+(GenerateCycleDb) with two adapters, not a function that takes a Supabase
+client directly.** The "95 facilities under 5 seconds" acceptance
+criterion is a property of a *fixed* number of round trips (5: active
+targets, active template, existing-in-cycle, history, one bulk insert)
+regardless of N, not of anything that scales with N — the whole point of
+the design. Isolating the four reads + one write behind an interface let
+that be proven twice: `generate-cycle.test.ts` proves it architecturally
+with a call-counting fake adapter and a synthetic 95-target run;
+`tests/db/generate-cycle.perf.test.ts` proves the acceptance criterion
+literally, seeding 95 real facilities in the local Postgres harness and
+timing a real RLS-scoped `generateAssessmentSet` call end to end (well
+under the 5-second budget in practice). The real app uses
+`supabaseGenerateCycleDb`, the same interface against a real
+(RLS-subject) Supabase client.
+
+**previous_assessment_id links only to an *approved* prior assessment;
+audit-number sequencing counts every prior assessment, approved or not.**
+These are deliberately different lookups. Carry-forward reporting
+(CONTEXT.md) needs a previous report that was actually approved — an
+in-progress draft has nothing reliable to carry forward. Numbering, by
+contrast, has to reflect how many audits have actually been attempted,
+approved or not, or two audits in the same cycle could collide on the same
+number.
+
+**Nav gets two new top-level items, Entities and Cycles.** The shell's nav
+list was specified verbatim in an earlier phase, but entity/facility/cycle
+management is core operational data with nowhere else to live in that
+structure — hiding it behind "Settings" would misrepresent what it is.
+Added between Overview and Assessment Programmes, the natural reading
+order (master data, then the programmes that consume it).
+
+**CSV import is fail-closed and non-transactional.** Any row-level
+validation error (`lib/scheduling/csv-import.ts`) stops the whole import
+before a single row is written — a partial import of the client's annual
+list is worse than no import. Given that guard, the actual writes
+(entities upserted by `entity_code`, contacts matched by
+(entity_id, lower(email) or lower(name)) and updated in place or inserted)
+are not wrapped in a single database transaction — Supabase's REST API has
+no multi-table transaction primitive, and this is an infrequent,
+human-supervised annual upload, not a hot path where that risk matters
+enough to justify a database function instead. A hand-rolled RFC4180-ish
+parser is used instead of a dependency — quoted commas/newlines/escaped
+quotes are the only real complexity, small enough to own directly and unit
+test exhaustively (18 test cases covering exactly those edge cases).

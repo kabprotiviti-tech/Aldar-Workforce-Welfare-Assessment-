@@ -38,14 +38,19 @@ export const assessmentRowSchema = z.object({
   facility_id: uuidSchema.nullable(),
   template_id: uuidSchema,
   subject_code: z.string(),
-  audit_number: z.number().int(),
+  /** Whole numbers for a full audit; +.5 for a follow-up (lib/scheduling/subject-code.ts). */
+  audit_number: z.number(),
   assessment_type: assessmentTypeSchema,
   stage: assessmentStageSchema,
   status: assessmentStatusSchema,
   owner_id: uuidSchema.nullable(),
   previous_assessment_id: uuidSchema.nullable(),
-  planned_visit_date: dateSchema.nullable(),
+  proposed_visit_date: dateSchema.nullable(),
+  confirmed_visit_date: dateSchema.nullable(),
   actual_visit_date: dateSchema.nullable(),
+  /** True only when the assessed facility sits under a regulatory body requiring visit permission. */
+  permission_required: z.boolean(),
+  /** Stored once (lib/scheduling/working-days.ts), never recomputed on read. */
   report_due_date: dateSchema.nullable(),
   qa_completed_at: timestampSchema.nullable(),
   approved_at: timestampSchema.nullable(),

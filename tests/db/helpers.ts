@@ -30,6 +30,8 @@ const MIGRATION_FILES = [
   "supabase/migrations/0009_template_immutability.sql",
   "supabase/migrations/0010_seed_checklist_templates_v1.sql",
   "supabase/migrations/0011_assessment_items_quantitative.sql",
+  "supabase/migrations/0012_visit_schedule.sql",
+  "supabase/migrations/0013_public_holidays.sql",
 ];
 
 /**

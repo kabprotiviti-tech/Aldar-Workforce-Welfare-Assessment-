@@ -70,6 +70,15 @@ The yearly assessment period every assessment belongs to (e.g. "2026 Cycle
 requirements, recurrence detection — have something concrete to compare
 against.
 
+### public_holidays (0013_public_holidays.sql)
+The UAE public holiday calendar `lib/scheduling/working-days.ts` reads to
+compute `assessments.report_due_date`. Seeded with only the fixed-Gregorian-
+date holidays (New Year's Day, Commemoration Day, National Day); the
+Islamic-calendar ones are set by moon sighting and announced close to the
+date, so they're added by an admin in Settings once confirmed each year
+rather than guessed here. Admin-write, staff-read, like
+`checklist_templates`.
+
 ## Templates
 Versioned checklists. A report has to stay reproducible against the exact
 template version it was assessed under (CONTEXT.md), so once any
@@ -115,6 +124,21 @@ figures (`risk_rating`, `overall_compliance_pct`,
 `adjusted_compliance_pct`) that `lib/rules/aggregate.ts` computes. A
 client_viewer sees a row here only once `issued_at` is set — a draft
 assessment is never visible to the client it's about.
+
+`0012_visit_schedule.sql` adds the visit-scheduling columns this prompt's
+entity/assessment management needed: `proposed_visit_date` (renamed from
+`planned_visit_date`) and `confirmed_visit_date` sit alongside the
+pre-existing `actual_visit_date` — three different, genuinely distinct
+dates (an initial offer, an agreed date, and what actually happened).
+`permission_required` is the assessment's own copy of a facility's
+`access_permission_required` flag, taken at generation time
+(`lib/scheduling/generate-cycle.ts`) and editable independently after —
+see docs/decisions.md. The client's supporting access letter for a
+permission-required visit is stored as any other evidence file
+(`evidence_files.document_class = 'access_letter'`), not a dedicated
+column. `audit_number` widened from integer to `numeric(5,1)`: full audits
+are whole numbers, a follow-up is the whole number below it plus `.5`
+(`lib/scheduling/subject-code.ts`).
 
 ### assessment_items
 One row per requirement within one assessment — the compliance status,
