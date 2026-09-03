@@ -406,6 +406,29 @@ one rule for one requirement — room "A-101", vehicle "AD-12345".
 Evaluations are stored, never recomputed on read, so revising a threshold
 cannot change what a past report said.
 
+### inspection_sync_log (0025_inspection_sync.sql)
+The idempotency ledger behind the offline inspection. Every queued
+mutation carries a `client_mutation_id` generated on the phone at capture
+time, and that id is this table's primary key — so a replay (a retry, a
+resumed sync, a lost acknowledgement) inserts nothing and applies
+nothing. A log table rather than a unique column per target table,
+because the mutations aren't all inserts: a quantitative capture updates
+a row that already exists and has no per-mutation row to constrain.
+
+`apply_inspection_mutation(client_mutation_id, assessment_id, kind,
+payload)` claims the id and does the work in one transaction, so there is
+no window where a mutation is applied but unrecorded or recorded but
+unapplied. It handles six kinds: `area_answer`, `area_quantitative`,
+`certificate` (appended, not overwritten, so two captured offline both
+survive), `area_rating` (which goes through 0024's assessor-decision
+trigger like any other status write), `room_count` (the assessor's own
+physical bed and occupancy count, recorded as a `manual` room source) and
+`photo`.
+
+`photos` gains `room_ref` — free text rather than an FK, because a photo
+is often taken before the room row exists and a photo that can't be
+saved on site is a photo lost.
+
 ## Findings and reports
 The two things CONTEXT.md says a client_viewer may see.
 

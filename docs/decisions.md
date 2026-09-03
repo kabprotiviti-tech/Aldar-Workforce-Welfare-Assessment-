@@ -1443,3 +1443,84 @@ shows its computed explanation and its legal reference; observations show
 their narrative and source. The status control is empty until a person
 fills it, and the statement "Final assessment decisions are made by the
 assessor." sits next to that control rather than in a footer.
+
+## On-site inspection
+
+`lib/inspection/`, `components/inspection/`,
+`app/app/assessments/[id]/inspection/`,
+`supabase/migrations/0025_inspection_sync.sql`. A phone, in a labour
+accommodation, on poor signal.
+
+**Exactly-once is the server's job, not the client's.** Every mutation
+gets its id on the device at capture time, and
+`apply_inspection_mutation` claims that id and does the work in one
+transaction. That ordering matters: a client that tried to guarantee
+uniqueness by remembering what it had sent would still duplicate in the
+one case that actually happens on site — the request arrived, the server
+applied it, and the response was lost on the way back. The DB test
+applies all 58 mutations, replays all 58, and asserts the second pass
+applied nothing.
+
+**Captures are written to IndexedDB before the UI acknowledges them.**
+"No data loss on app close" is not achievable with an in-memory queue and
+a periodic flush — what's lost is whatever was captured since the last
+flush, which on a site visit is the last few rooms. `enqueue` resolves
+only once the transaction has committed, so the UI is telling the truth
+when it says a capture is safe. Tested by closing the queue and
+reopening a new one over the same database.
+
+**Photos are compressed before they join the queue, not before upload.**
+A phone photo is 3-8MB and twenty of them is over 100MB of IndexedDB on
+a device that may be low on space — and it's the queue, not the upload,
+that has to survive the day. Compression falls back to the original
+bytes if anything about it fails: a photo that can't be shrunk is still
+evidence, and losing it on site is the worse outcome.
+
+**The photo's Storage path is derived from its mutation id.** A retried
+upload overwrites the same object rather than leaving an orphan, so the
+upload is idempotent for the same reason the mutation is. An "already
+exists" error on retry is treated as success — the bytes we wanted are
+there.
+
+**Geolocation is best-effort and time-boxed.** A labour accommodation is
+often a concrete building with no GPS lock, so `readGeolocation`
+resolves to nulls rather than rejecting and never blocks a capture for
+more than five seconds. A photo without coordinates is still worth
+having.
+
+**An area rating synced from the phone is a real assessor decision.** It
+goes through 0024's status trigger like any other, stamped with
+`decided_by`/`decided_at` from the syncing assessor and audited. Offline
+capture changes when a decision reaches the database, not who made it or
+whether it is recorded.
+
+**Certificates append rather than overwrite.** Two certificates captured
+offline in the same area must both survive the sync; a whole-object
+quantitative write would silently drop whichever arrived first. That is
+why `certificate` is its own mutation kind rather than a plain
+quantitative write.
+
+**The queue drains in capture order.** A room's counts should land
+before a photo that references that room, and an area's answers before
+its rating.
+
+**The Accommodation template still has no key questions.** They are real
+regulatory content pending from the client (0010 deliberately seeds none
+— see the template phase's decisions), so the inspection screen says so
+plainly per area rather than inventing questions, and quantitative
+capture, photos and the area rating work regardless. The DB test seeds
+one question per area to exercise the answer path, which also had to be
+done *before* the assessment exists: 0009's immutability trigger freezes
+a template the moment an assessment references it, which is the
+behaviour we want and worked with rather than around.
+
+**What was not tested: a literal airplane-mode run in a browser.** There
+is no live Supabase project in this sandbox, so the app cannot run end to
+end. The two halves are proven separately and honestly — the queue
+against real IndexedDB (`fake-indexeddb`, with real transaction and
+durability semantics), capturing a full 12-area inspection with 20
+photos offline and syncing each mutation exactly once across retries and
+an app close; and the server against real Postgres, applying and then
+replaying the same 58 mutations. The gap that remains is the browser
+itself: camera capture, canvas compression, and the `online`/`offline`
+events.

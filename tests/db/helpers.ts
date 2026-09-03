@@ -45,6 +45,7 @@ const MIGRATION_FILES = [
   "supabase/migrations/0022_rule_engine.sql",
   "supabase/migrations/0023_observations.sql",
   "supabase/migrations/0024_assessment_decision.sql",
+  "supabase/migrations/0025_inspection_sync.sql",
 ];
 
 /**
