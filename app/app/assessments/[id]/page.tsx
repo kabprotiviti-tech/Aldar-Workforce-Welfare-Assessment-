@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { assignAssessmentOwner, recordActualVisitDate, updateVisitSchedule, uploadAccessLetter } from "@/lib/assessments/actions";
 import { issueRfiAction } from "@/lib/rfi/actions";
 import { buildCycleDiff } from "@/lib/assessment/carry-forward";
+import { loadAndRunQaChecklist } from "@/lib/qa/checklist-supabase";
 import type { ComplianceRating } from "@/lib/rules/constants";
 import { Card } from "@/components/ds/card";
 import { Field } from "@/components/ds/field";
@@ -12,6 +13,8 @@ import { Pill, type PillTone } from "@/components/ds/pill";
 import { Stat } from "@/components/ds/stat";
 import { EmptyState } from "@/components/ds/empty-state";
 import { StatusBanner } from "@/components/app/status-banner";
+import { AssessmentTimeline } from "@/components/qa/assessment-timeline";
+import { QaGovernancePanel } from "@/components/qa/qa-governance-panel";
 
 const STATUS_TONE: Record<ComplianceRating, PillTone> = {
   Compliant: "ok",
@@ -83,6 +86,45 @@ export default async function AssessmentDetailPage({
   );
   const hasPreviousCycle = cycleDiff.some((row) => row.previousStatus !== null);
 
+  const { data: userData } = await supabase.auth.getUser();
+  const [{ data: currentUser }, checklist, { data: queryRows }, { data: revisionRows }, { data: itemOptionRows }] = await Promise.all([
+    userData.user ? supabase.from("users").select("role").eq("id", userData.user.id).maybeSingle() : Promise.resolve({ data: null }),
+    loadAndRunQaChecklist(supabase, id),
+    supabase
+      .from("qa_queries")
+      .select("id, assessment_item_id, query_text, status, resolution_note, raised_at, assessment_items(requirements(sl_no, title))")
+      .eq("assessment_id", id)
+      .order("raised_at", { ascending: false }),
+    supabase.from("assessment_revisions").select("revision_number, reason, revised_at").eq("assessment_id", id).order("revision_number"),
+    supabase.from("assessment_items").select("id, requirements(sl_no, title)").eq("assessment_id", id),
+  ]);
+
+  const currentRole = (currentUser?.role as string | undefined) ?? null;
+  const canQaReview = currentRole === "admin" || currentRole === "qa_reviewer";
+  const canApprove = currentRole === "admin";
+
+  const queries = (queryRows ?? []).map((row) => {
+    const item = (Array.isArray(row.assessment_items) ? row.assessment_items[0] : row.assessment_items) as { requirements: unknown } | null;
+    const requirement = (Array.isArray(item?.requirements) ? item?.requirements[0] : item?.requirements) as { sl_no: number; title: string } | undefined;
+    return {
+      id: row.id as string,
+      itemId: row.assessment_item_id as string,
+      itemLabel: requirement ? `${requirement.sl_no}. ${requirement.title}` : "Requirement",
+      queryText: row.query_text as string,
+      status: row.status as "open" | "resolved",
+      resolutionNote: (row.resolution_note as string | null) ?? null,
+      raisedAt: row.raised_at as string,
+    };
+  });
+
+  const itemOptions = (itemOptionRows ?? [])
+    .map((row) => {
+      const requirement = (Array.isArray(row.requirements) ? row.requirements[0] : row.requirements) as { sl_no: number; title: string } | null;
+      return requirement ? { id: row.id as string, slNo: requirement.sl_no, title: requirement.title } : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+    .sort((a, b) => a.slNo - b.slNo);
+
   return (
     <div className="grid gap-8">
       <div className="flex items-start justify-between gap-4">
@@ -116,6 +158,26 @@ export default async function AssessmentDetailPage({
       </div>
 
       <StatusBanner error={error} success={success} />
+
+      <AssessmentTimeline
+        createdAt={assessment.created_at}
+        qaCompletedAt={assessment.qa_completed_at}
+        approvedAt={assessment.approved_at}
+        issuedAt={assessment.issued_at}
+        revisions={(revisionRows ?? []).map((row) => ({ revisionNumber: row.revision_number as number, reason: row.reason as string, revisedAt: row.revised_at as string }))}
+      />
+
+      <QaGovernancePanel
+        assessmentId={id}
+        qaStatus={assessment.qa_status}
+        approvalStatus={assessment.approval_status}
+        revisionNumber={assessment.revision_number}
+        checklist={checklist}
+        queries={queries}
+        items={itemOptions}
+        canQaReview={canQaReview}
+        canApprove={canApprove}
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>

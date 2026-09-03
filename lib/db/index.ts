@@ -10,3 +10,4 @@ export * from "./accommodation-quantitative";
 export * from "./settings";
 export * from "./rfi";
 export * from "./ai";
+export * from "./governance";

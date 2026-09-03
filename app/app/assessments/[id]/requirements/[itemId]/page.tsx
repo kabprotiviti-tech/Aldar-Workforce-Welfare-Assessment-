@@ -40,7 +40,7 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
   const { data: item } = await supabase
     .from("assessment_items")
     .select(
-      "id, assessment_id, requirement_id, compliance_status, remarks, action_required, was_assessed, previous_compliance_status, previous_remarks, previous_action_required, carried_forward_from_item_id, assessor_observations, office_visit_observations, draft_updated_at, evidence_detail, decided_at, requirements(sl_no, title, is_key, detail_text)",
+      "id, assessment_id, requirement_id, compliance_status, remarks, action_required, was_assessed, previous_compliance_status, previous_remarks, previous_action_required, carried_forward_from_item_id, assessor_observations, office_visit_observations, draft_updated_at, evidence_detail, decided_at, locked, requirements(sl_no, title, is_key, detail_text)",
     )
     .eq("id", itemId)
     .eq("assessment_id", id)
@@ -196,6 +196,12 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
             </p>
           </div>
         </header>
+
+        {item.locked && (
+          <div className="rounded-ds-control border border-ds-line bg-ds-surface-2 px-3 py-2.5 text-sm text-ds-ink-2">
+            This requirement is locked — the assessment has been approved. Open a formal revision from the assessment page to edit it.
+          </div>
+        )}
 
         <CarryForwardPanel
           assessmentId={id}

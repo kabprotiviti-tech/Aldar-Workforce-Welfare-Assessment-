@@ -211,6 +211,100 @@ work question-by-question (Employment Practices/Onboarding). Rolls up
 into its parent item's compliance status; a request the assessor confirms
 never touches this table without also touching the item above it.
 
+## Governance: QA, approval, lock and revision (0030_governance.sql)
+The layer the RFP calls "QA before submission for approval." Built
+entirely on columns already scaffolded in `0004_assessments.sql` and
+never written to before this migration: `qa_completed_at`, `approved_at`,
+`issued_at` on `assessments`, and `locked` on `assessment_items`.
+
+### assessments (qa_status / approval_status / revision_number)
+`qa_status` (`not_started → in_review → (returned | passed)`) is
+distinct from `stage`'s own `'review'` value, which means desktop
+document review before an office visit — a different thing. `approval_status`
+(`pending → awaiting_client → approved`) moves to `awaiting_client`
+automatically the instant `qa_status` becomes `passed` — "on QA pass, the
+assessment moves to client approval" is a trigger's own side effect
+(`enforce_qa_status_transition`), not a second manual step. `approved_at`
+can only be set once `approval_status` was already `awaiting_client`
+(`enforce_approval_transition`) — approval is unreachable any other way,
+regardless of which application code path attempts it. `issued_at`,
+scaffolded since `0004_assessments.sql` but never written until this
+migration, is set at that same moment: it's what
+`assessment_is_issued()`/the client_viewer RLS policies on
+`assessments`/`reports`/`findings` have been gating on since they were
+written, and client approval is the first real event that satisfies
+them. `revision_number` is `n` in "version n+1" — starts at 1, and is
+the only column `open_assessment_revision` (below) is allowed to
+increment.
+
+**An approved assessment is locked at the database level**
+(`enforce_assessment_lock`, `assessments_locked_immutable`): once
+`approval_status = 'approved'`, every write is rejected except the
+exact unlock shape `open_assessment_revision` produces (`approval_status`
+back to `pending`, `qa_status` to `not_started`, `approved_at`/
+`qa_completed_at` to null, `revision_number` incremented by exactly one,
+nothing else in the same statement). The comparison is a whole-row jsonb
+diff (minus the columns the transition may touch), not a hand-listed
+column set, so the guarantee can't quietly go stale as future migrations
+add columns. RLS can't provide this: the service-role/table-owner
+connection this app's own server code runs under bypasses RLS by
+design, the same reasoning as `0024_assessment_decision.sql`.
+
+### assessment_items.locked
+**Immutable once locked, in both directions**
+(`enforce_assessment_item_lock`, `assessment_items_locked_immutable`): a
+locked item rejects every write except the unlock (`locked: true →
+false`, nothing else changed — the same whole-row-jsonb-diff style as
+the assessments trigger); and a row may only become locked in the first
+place once its parent assessment's `approval_status = 'approved'`,
+closing the gap a direct write could otherwise open.
+
+### qa_queries
+A QA reviewer's query against one specific requirement ("raises queries
+against specific requirements" — this prompt). `raised_by` is
+`can_qa_review()`-gated (admin/qa_reviewer); resolving one is
+`resolveQaQuery` (`lib/qa/actions.ts`), an assessor/admin action — the
+point of a query is that someone else answers it. `qa_status` cannot
+become `'passed'` while any row here has `status = 'open'`
+(`enforce_qa_status_transition`).
+
+### assessment_revisions
+One row per formal revision ("creates version n+1, preserving version n
+in full" — this prompt). `preserved_report_id` anchors exactly which
+`reports` row was version n at the moment the revision opened — that
+row is never touched again (see `reports.snapshot` below), so
+"preserving version n in full" is a database guarantee, not a filing
+convention. Written only by `open_assessment_revision`, never by a
+direct insert — the actor/timestamp has to be the real caller's, the
+same reasoning as `resolve_extracted_fact` in `0021_fact_ledger.sql`.
+
+### reports.snapshot
+The report's actual content (header + per-requirement rows,
+`lib/reports/snapshot.ts`), not just a pointer to the Storage file at
+`storage_path` — this is what makes "a revision preserves... its data
+exactly" a fact provable in the database itself, independent of
+Storage. **A generated report is immutable except for `is_current`**
+(`enforce_report_immutability`, `reports_immutable_except_is_current`):
+every other column is frozen the moment the row is inserted.
+
+### The two atomic RPCs
+Both `security definer`, both check `public.is_admin()` themselves
+(the same pattern as `resolve_extracted_fact`) — a Supabase/PostgREST
+client can't span a transaction across separate calls, and each of
+these touches more than one table as one unit:
+- **`approve_assessment_and_generate_report(p_assessment_id,
+  p_storage_path, p_snapshot, p_format)`** — the caller has already
+  rendered the snapshot and uploaded it to Storage
+  (`lib/reports/generate-supabase.ts`); this is the atomic database
+  side: flips `approval_status` to `approved` (stamping `approved_at`/
+  `issued_at`), locks every item, flips any prior current report to
+  `is_current = false`, and inserts the new one at
+  `version = revision_number`.
+- **`open_assessment_revision(p_assessment_id, p_reason)`** — requires
+  `approval_status = 'approved'` and a non-empty reason, then resets
+  the assessment's governance state, unlocks every item, and records
+  the `assessment_revisions` row.
+
 ## Evidence and AI
 Staff-only throughout — CONTEXT.md scopes client_viewer to "reports and
 findings," not the working material behind them. `extractions` and
@@ -593,6 +687,11 @@ A generated report file for an assessment: version, format, storage path,
 and `is_current` marking which version is the live one. A client_viewer
 sees a report only when it's `is_current` and its assessment has been
 issued — "approved reports," not drafts or superseded versions.
+`0030_governance.sql` adds `snapshot` (the report's own content, not
+just a Storage pointer) and makes every row immutable except
+`is_current` — see "Governance: QA, approval, lock and revision" above.
+Written only by `approve_assessment_and_generate_report`; the file
+itself lives in the `reports` Storage bucket (`0031_reports_bucket.sql`).
 
 ## Request for information (RFI)
 `0014_rfi.sql`. The tokenised-portal tables have no RLS policies at all —

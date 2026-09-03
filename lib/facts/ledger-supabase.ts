@@ -61,3 +61,20 @@ export async function listFactsForEvidenceFiles(supabase: SupabaseClient, eviden
   if (error) throw error;
   return (data ?? []).map((row) => ledgerFactFromRow(row as unknown as ExtractedFactRowLike));
 }
+
+/**
+ * How many facts for one assessment are still `proposed` — the QA
+ * checklist's "every extracted fact resolved" gate
+ * (lib/qa/checklist.ts) needs exactly this count, nothing else about
+ * the fact's content, so it asks the ledger rather than querying
+ * extracted_facts itself (tests/read-path.test.ts).
+ */
+export async function countProposedFactsForAssessment(supabase: SupabaseClient, assessmentId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("extracted_facts")
+    .select("id, evidence_files!inner(assessment_id)", { count: "exact", head: true })
+    .eq("evidence_files.assessment_id", assessmentId)
+    .eq("status", "proposed");
+  if (error) throw error;
+  return count ?? 0;
+}

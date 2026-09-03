@@ -30,6 +30,24 @@ export type AssessmentStage = z.infer<typeof assessmentStageSchema>;
 export const assessmentStatusSchema = z.enum(["draft", "active", "on_hold", "completed", "cancelled"]);
 export type AssessmentStatus = z.infer<typeof assessmentStatusSchema>;
 
+/**
+ * 0030_governance.sql. Distinct from `stage` above — stage's own
+ * 'review' value means desktop document review before an office visit,
+ * a different thing from QA review. not_started -> in_review ->
+ * (returned | passed); a revision resets this back to not_started.
+ */
+export const qaStatusSchema = z.enum(["not_started", "in_review", "returned", "passed"]);
+export type QaStatus = z.infer<typeof qaStatusSchema>;
+
+/**
+ * 0030_governance.sql. pending -> awaiting_client (set automatically
+ * the moment qa_status becomes 'passed') -> approved (the formal,
+ * admin-gated act of client approval, which locks the assessment and
+ * generates a report). A revision resets this back to pending.
+ */
+export const approvalStatusSchema = z.enum(["pending", "awaiting_client", "approved"]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
 export const assessmentRowSchema = z.object({
   id: uuidSchema,
   module: dbModuleSchema,
@@ -55,6 +73,9 @@ export const assessmentRowSchema = z.object({
   qa_completed_at: timestampSchema.nullable(),
   approved_at: timestampSchema.nullable(),
   issued_at: timestampSchema.nullable(),
+  qa_status: qaStatusSchema,
+  approval_status: approvalStatusSchema,
+  revision_number: z.number().int(),
   risk_rating: dbRiskRatingSchema.nullable(),
   overall_compliance_pct: z.number().nullable(),
   adjusted_compliance_pct: z.number().nullable(),

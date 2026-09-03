@@ -1909,3 +1909,120 @@ the pure logic each action calls (`lib/findings/lifecycle.ts`,
 `lib/findings/escalation.ts`, `lib/findings/history.ts`) in isolation,
 and the database triggers/constraints that are the actual enforcement,
 proven directly against Postgres.
+
+## Governance: QA, approval, lock and revision
+
+**Built on columns scaffolded from the very first migration and never
+written to.** `assessments.qa_completed_at`/`approved_at`/`issued_at`
+and `assessment_items.locked` all existed since `0004_assessments.sql` —
+`0004`'s own comment even names the gap this migration closes ("qa_reviewer
+needs UPDATE too... RLS is row-level, not column-level"). This phase is
+that wiring, not a new set of columns bolted alongside old dead ones.
+
+**`approval_status` is three values, not two, because "on QA pass, the
+assessment moves to client approval" and "on client approval, [it]
+lock[s]" are two distinct sentences describing two distinct events.**
+`pending → awaiting_client → approved`: the middle value is set
+automatically by a trigger the instant `qa_status` becomes `'passed'`
+(`enforce_qa_status_transition`) — a structural guarantee that QA
+passing really does move the assessment to client approval, not
+something an application code path could forget to do. `approved` is
+reachable only from `awaiting_client`, never directly from `pending`
+(`enforce_approval_transition`) — approval is unreachable without
+having gone through a QA pass, regardless of which code path attempts
+it.
+
+**A closed-loop QA reopen reverts approval back to pending.** If
+`qa_status` moves off `'passed'` (a QA reviewer notices something and
+reopens the review) while `approval_status` is still only
+`'awaiting_client'` — not yet actually approved — the same trigger
+reverts `approval_status` to `'pending'` and clears `qa_completed_at`.
+Client approval was never real in that window (nobody clicked approve
+yet), so there is nothing to undo on the approval side, only a
+consistency fix: the assessment stops claiming to be "awaiting client
+approval" for a QA pass that no longer holds. Once `approval_status`
+actually reaches `'approved'`, the lock trigger takes over and this
+never applies — the only way out of `'approved'` is a formal revision.
+
+**Whole-row jsonb diffs, not hand-listed column sets, are what "nothing
+else changed" means in both lock triggers.** `enforce_assessment_lock`
+and `enforce_assessment_item_lock` each compare `to_jsonb(new) -
+'<allowed columns>'` against the same expression on `old`, rather than
+listing every content column that must stay equal. Hand-listing was the
+first draft; it was rejected because a future migration that adds a
+column to `assessments`/`assessment_items` would silently NOT be
+protected by the lock unless someone remembered to update this
+trigger too — the exact kind of guarantee that "goes stale" for a
+lock this important. The jsonb-diff form stays correct automatically.
+
+**Items can only become locked once their assessment is actually
+approved — checked at the trigger, not only by which caller does the
+locking.** `enforce_assessment_item_lock` queries the parent
+assessment's `approval_status` before allowing `locked: false → true`.
+Without this, any direct write (a bug, a future code path, a manual
+fix) could lock an item prematurely, and the immutability half of the
+trigger would then wrongly protect data that was never actually
+approved. The only real caller today is
+`approve_assessment_and_generate_report`, which sets the parent's
+`approval_status = 'approved'` in the same transaction just before
+locking items — so this check is a genuine backstop, not a formality.
+
+**A revision reopens the same assessment row rather than cloning a new
+one.** The alternative — duplicating `assessments` plus every
+`assessment_item`/`evidence_file`/`finding` row into a fresh assessment
+per revision — was considered and rejected: "preserving version n in
+full" doesn't require the *assessment* to be frozen forever, only its
+*report* — and the report is exactly what does get frozen, immutably,
+as its own row with its own snapshot (`reports.snapshot`,
+`enforce_report_immutability`). Reopening in place also matches how
+`0029_finding_lifecycle.sql`'s own reopen already works for one finding
+— the same shape at a larger scope. `assessment_revisions.preserved_report_id`
+is what actually answers "what did version n look like": a
+self-contained jsonb snapshot, not a live re-derivation from
+assessment_items that a later revision could quietly change out from
+under it.
+
+**The report's authoritative content is a `jsonb` column
+(`reports.snapshot`), not only a file in Storage.** A Storage object
+alone would make "preserves... its data exactly" untestable without a
+real Supabase project — this codebase's local Postgres test harness has
+no Storage schema at all (the same reason `0016_evidence_bucket.sql`/
+`0031_reports_bucket.sql` are excluded from `tests/db/helpers.ts`).
+Storing the same content twice (Storage file + jsonb column) is
+deliberate redundancy: the file is what a human downloads, the column
+is what a database trigger and a test can actually prove untouched.
+
+**CONTEXT.md's report header/table columns this platform has no data
+source for (Originator, Description, Type, Project Type, Project Name;
+Accommodation's "Key Questions" and a separate "Assessment" narrative
+column distinct from Remarks) are omitted from `lib/reports/snapshot.ts`
+rather than invented.** Per CONTEXT.md rule 7 ("never guess to fill a
+field"), the snapshot only carries fields this schema actually tracks —
+subject code, module, entity/facility, audit number, visit date, risk
+rating, overall/adjusted compliance, and the per-requirement rows. A
+future phase that adds those fields to the schema can add them to the
+snapshot; inventing placeholder values now would make version n's
+"exact" data a fiction.
+
+**"Photos attached where the module requires them" is read as a
+module-level rule: Accommodation (a physical inspection) requires a
+photo per area; Employment Practices/Onboarding (desk/office review)
+never do.** CONTEXT.md doesn't name which specific areas or questions
+need a photo, so a per-question reading would be inventing a
+distinction the brief never draws. "Specific numbers present (sample
+sizes, dates)" is similarly scoped — to the 10 key requirements,
+EP/Onboarding only, genuinely assessed this cycle (not carried
+forward, not Not Applicable) — via `lib/assessment/decision.ts`'s
+existing `evidenceDetailSchema`, requiring at least one recorded sample
+size. Both are judgment calls filling a gap CONTEXT.md leaves open,
+not literal instructions.
+
+**What was not tested: the actual Next.js server actions in
+`lib/qa/actions.ts` through a live request.** Same constraint as every
+other server action in this codebase — proven instead at the two
+levels that don't need one: the pure logic each action calls
+(`lib/qa/lifecycle.ts`, `lib/qa/checklist.ts`, `lib/qa/timeline.ts`,
+`lib/reports/snapshot.ts`) in isolation, and the database triggers/RPCs
+that are the actual enforcement (`tests/db/governance.test.ts`),
+including a full approve → revise → re-approve cycle proving version
+1's report row is byte-for-byte unchanged after version 2 exists.

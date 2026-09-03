@@ -50,6 +50,10 @@ const MIGRATION_FILES = [
   "supabase/migrations/0027_room_area.sql",
   "supabase/migrations/0028_carry_forward.sql",
   "supabase/migrations/0029_finding_lifecycle.sql",
+  "supabase/migrations/0030_governance.sql",
+  // 0031_reports_bucket.sql is deliberately excluded: it operates on
+  // storage.buckets/storage.objects, which only exist in a real
+  // Supabase project, not this local Postgres stand-in.
 ];
 
 /**

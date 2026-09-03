@@ -75,6 +75,8 @@ export const reportRowSchema = z.object({
   version: z.number().int(),
   format: z.string(),
   storage_path: z.string(),
+  /** 0030_governance.sql — the report's own content, not just a pointer to the Storage file. See lib/reports/snapshot.ts. */
+  snapshot: z.unknown(),
   generated_at: timestampSchema,
   generated_by: uuidSchema.nullable(),
   is_current: z.boolean(),
