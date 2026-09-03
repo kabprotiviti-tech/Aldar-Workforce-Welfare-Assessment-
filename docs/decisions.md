@@ -1524,3 +1524,95 @@ an app close; and the server against real Postgres, applying and then
 replaying the same 58 mutations. The gap that remains is the browser
 itself: camera capture, canvas compression, and the `online`/`offline`
 events.
+
+## Photograph analysis
+
+**A photograph is analysed for a closed vocabulary or not at all.** Eight
+classes, each with a declared field list (`lib/vision/classes.ts`). The
+prompt is generated from that list, the response schema is generated
+from it, and the schema is strict — so a field the vocabulary does not
+declare is a failed response rather than an interesting extra. Everything
+else in this section follows from that one decision.
+
+**The constraint is stated to the model, then enforced without it.** The
+prompt says plainly that area, dimensions, per-person ratios,
+temperature, water quality and occupancy totals are not in a photograph
+and must be named in `cannot_determine`. Saying so gets a better answer
+than a model quietly estimating. But the prompt is not the control: four
+guards run over every response — status-like keys stripped,
+undeterminable keys stripped, strict schema validation, then each
+reading reduced to the properties its field's kind actually has. A
+`verbatim_text` on a field that reads no text is nulled, which is what
+removes the last route by which a room photograph could carry a
+free-form measurement.
+
+**Free text is guarded separately from field names.** A model does not
+need a field called `floor_area_m2` to claim an area; it can write
+"roughly 26 m² for 8 men" into a condition reading. `containsUndeterminableClaim`
+matches measurements, ratios, temperatures and occupancy claims narrowly
+enough to leave "surfaces worn, one panel missing" alone.
+
+**Key matching is by word, not substring.** An early version collapsed
+keys to letters and looked for "ratio", which silently deleted
+`vehicle_registration_expiry_date` — "registration" contains those five
+letters in order. Keys are now split into words and matched with
+boundaries.
+
+**Counts are counts in frame, and code says so.** Every count field is
+named `*_in_frame` and declares the total it is not; when a count is
+reported, code appends that caveat to `cannot_determine`. Six beds
+visible is not a room that sleeps six, and the caveat is added whether or
+not the model thought to mention it.
+
+**Only a verbatim reading of printed text may become a fact.** A
+presence, a count in frame, a condition — those are observations for an
+assessor to weigh, and there is no fact key to record them under. A
+service date on a tag, a grievance number on a board, a plate on a van:
+those are things the camera recorded rather than things the model judged.
+The declaration is guarded at import time — pointing a derived fact at a
+non-text field throws.
+
+**The assessor enters the date; the model only reads what is printed.**
+"12/03/2025" does not say which number is the month, and resolving it is
+a judgement about the document rather than a reading of it. So a
+photo-derived date requires an ISO date typed by the assessor, with the
+verbatim text shown beside the image. This is the same posture as the
+inspection's assessor-entered certificate expiry, and it makes "becomes a
+fact only after assessor confirmation" literal rather than a status
+change.
+
+**A certificate photographed on a wall does not silently become the
+civil defence expiry a rule computes with.** `certificate_document`'s
+expiry reading offers a choice of fact key — the generic
+`photo_certificate_expiry_date` by default, or `civil_defence_expiry_date`
+or `vehicle_registration_expiry_date` if the assessor says that is what
+the document is. The choice is a person's, it is recorded, and the
+default is the one no rule reads.
+
+**Analysis is requested, not automatic.** A site visit produces dozens of
+frames. An assessor decides which are worth a model call, so the platform
+does not spend money on every one.
+
+**Confirmed readings go into `extracted_facts`, not a parallel table.**
+"Feeds the rule engine like any other fact" is meant literally: the same
+table, the same `fact_ledger_confirmed` view, and a rule engine that
+cannot tell where the value came from and does not need to. The cost is
+relaxing two NOT NULLs and adding a one-source check constraint; the
+alternative was a second fact pipeline with its own confirmation
+semantics to keep in step.
+
+**The fact-key allowlist is a trigger, not a check constraint.** A check
+constraint cannot subquery, and the list belongs in a table so it can be
+read and seeded. The trigger fires on insert *and* update, because an
+allowed key changed to a forbidden one afterwards would otherwise slip
+through. The test exercises it on the admin pool — table owner and
+superuser, where RLS does not apply — so a pass there means the
+guarantee holds on every code path.
+
+**What was not tested: a real photograph through a real model.** There is
+no live Anthropic call or Supabase Storage in this sandbox. The analyser
+is proven against crafted responses, including hostile ones that invent
+an area field, smuggle a measurement into free text, add a status key,
+and repeat a field; the database half is proven against real Postgres.
+The gap that remains is the model's own behaviour on a real image, which
+is exactly why none of the guarantees above depend on it.

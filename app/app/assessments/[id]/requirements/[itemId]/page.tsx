@@ -5,6 +5,9 @@ import { listConfirmedObservations } from "@/lib/observations/generate-supabase"
 import { OBSERVATION_KIND_LABELS, sourceSummary } from "@/lib/observations/store";
 import { assessmentProgress, ASSESSOR_DECISION_STATEMENT, parseEvidenceDetail, type ItemDecision } from "@/lib/assessment/decision";
 import type { ComplianceRating } from "@/lib/rules/constants";
+import { getPhotoClass } from "@/lib/vision/classes";
+import { readingSummary } from "@/lib/vision/store";
+import type { AnalysedReading } from "@/lib/vision/analyse";
 import { RequirementNav, type RequirementNavItem } from "@/components/assessment/requirement-nav";
 import { DecisionForm } from "@/components/assessment/decision-form";
 import { Pill, type PillTone } from "@/components/ds/pill";
@@ -48,7 +51,7 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
     notFound();
   }
 
-  const [{ data: assessment }, { data: siblingRows }, { data: linkRows }, { data: evaluationRows }, { data: factRows }, observations, { data: interviewRow }] =
+  const [{ data: assessment }, { data: siblingRows }, { data: linkRows }, { data: evaluationRows }, { data: factRows }, observations, { data: photoAnalysisRows }, { data: interviewRow }] =
     await Promise.all([
       supabase.from("assessments").select("subject_code, entities(name), facilities(name)").eq("id", id).maybeSingle(),
       supabase
@@ -66,6 +69,14 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
         .order("evaluated_at", { ascending: false }),
       supabase.from("fact_ledger_confirmed").select("fact_key, confirmed_value, unit, page_ref, verbatim_quote").eq("assessment_id", id),
       listConfirmedObservations(supabase, itemId),
+      // Confirmed photograph analyses, read through the view that only
+      // returns the ones an assessor accepted (0026_photo_analysis.sql).
+      // A proposed or rejected analysis cannot reach this page.
+      supabase
+        .from("photo_analysis_confirmed")
+        .select("id, photo_id, photo_class, room_ref, confirmed_findings, cannot_determine")
+        .eq("assessment_id", id)
+        .eq("requirement_id", item.requirement_id),
       supabase
         .from("interview_insights")
         .select("workers_interviewed_count, nationalities, interpreter_used, notes")
@@ -204,6 +215,48 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
                   {row.legal_reference && <p className="mt-1 text-xs text-ds-ink-2">{row.legal_reference}</p>}
                 </div>
               ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-ds-ink">Photograph observations</h2>
+          <p className="mt-0.5 text-xs text-ds-ink-2">
+            Confirmed by the assessor on the photograph review screen. A photograph cannot establish area, dimensions, per-person ratios,
+            temperature, water quality or occupancy totals, and each analysis says so below.
+          </p>
+          {(photoAnalysisRows ?? []).length === 0 ? (
+            <p className="mt-1.5 text-sm text-ds-ink-2">No photograph analysis has been confirmed for this requirement yet.</p>
+          ) : (
+            <div className="mt-1.5 grid gap-2">
+              {(photoAnalysisRows ?? []).map((row) => {
+                const readings = ((row.confirmed_findings ?? []) as AnalysedReading[]) ?? [];
+                return (
+                  <div key={row.id as string} className="rounded-ds-control border border-ds-line bg-ds-surface px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-medium text-ds-ink">{getPhotoClass(row.photo_class as string)?.label ?? row.photo_class}</span>
+                      {row.room_ref && <span className="text-xs text-ds-ink-2">{row.room_ref as string}</span>}
+                    </div>
+                    <ul className="mt-1 grid gap-0.5">
+                      {readings.map((reading) => (
+                        <li key={reading.field} className="text-sm text-ds-ink">
+                          {reading.description}: <span className="text-ds-ink-2">{readingSummary(reading)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-xs text-ds-ink-2">What this photograph cannot establish</summary>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                        {((row.cannot_determine ?? []) as string[]).map((entry) => (
+                          <li key={entry} className="text-xs text-ds-ink-2">
+                            {entry}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

@@ -78,3 +78,57 @@ describe("fact_ledger_confirmed is the only read path for facts", () => {
     expect(migration).toMatch(/security_invoker = true/);
   });
 });
+
+/**
+ * The same guarantee for photograph analysis (this prompt: "rejected
+ * analyses are retained with reason and excluded from the report").
+ * photo_analysis_confirmed is the enforcement (0026_photo_analysis.sql);
+ * this is the half that proves nothing reaches around it.
+ *
+ * Three modules touch photo_analyses directly, and none is a downstream
+ * consumer of a confirmed analysis:
+ *  - lib/vision/analyse-supabase.ts writes the row.
+ *  - lib/vision/actions.ts reads the proposed row in order to resolve it,
+ *    which is the review itself.
+ *  - the photograph review page shows an assessor their unreviewed
+ *    analyses, which is precisely its job.
+ */
+const ANALYSIS_ALLOWED_FILES = new Set([
+  "lib/vision/analyse-supabase.ts",
+  "lib/vision/actions.ts",
+  join("app", "app", "assessments", "[id]", "photos", "page.tsx"),
+]);
+
+describe("photo_analysis_confirmed is the only read path for an analysis", () => {
+  it("no application module outside the review surface and the writer queries photo_analyses", () => {
+    const offenders = appSourceFiles().filter((file) => {
+      if (ANALYSIS_ALLOWED_FILES.has(file)) return false;
+      const source = readFileSync(file, "utf8");
+      return /from\s*\(\s*["'`]photo_analyses["'`]\s*\)/.test(source) || /\bfrom\s+(public\.)?photo_analyses\b/i.test(source);
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("the allowlist is not stale", () => {
+    for (const file of ANALYSIS_ALLOWED_FILES) {
+      expect(readFileSync(file, "utf8")).toMatch(/photo_analyses/);
+    }
+  });
+
+  it("the view exists, filters to confirmed statuses, and applies the caller's own RLS", () => {
+    const migration = readFileSync("supabase/migrations/0026_photo_analysis.sql", "utf8");
+    expect(migration).toMatch(/create view public\.photo_analysis_confirmed/);
+    expect(migration).toMatch(/where a\.status in \('accepted', 'edited'\)/);
+    expect(migration).toMatch(/security_invoker = true/);
+  });
+
+  it("keeps fact_ledger_confirmed's own guarantees when it gains the photograph source", () => {
+    // 0026 drops and recreates the view; the two properties it exists
+    // for must survive that.
+    const migration = readFileSync("supabase/migrations/0026_photo_analysis.sql", "utf8");
+    expect(migration).toMatch(/create view public\.fact_ledger_confirmed/);
+    expect(migration).toMatch(/where f\.status in \('accepted', 'edited'\)/);
+    expect(migration).not.toMatch(/f\.value_text,/);
+  });
+});

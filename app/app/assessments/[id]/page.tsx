@@ -60,12 +60,26 @@ export default async function AssessmentDetailPage({
           </div>
           <p className="mt-1 text-sm text-ds-ink-2">{facilityName ?? entityName}</p>
         </div>
-        <Link
-          href={`/app/assessments/${id}/evidence`}
-          className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
-        >
-          Evidence library
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/app/assessments/${id}/evidence`}
+            className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+          >
+            Evidence library
+          </Link>
+          <Link
+            href={`/app/assessments/${id}/photos`}
+            className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+          >
+            Photograph review
+          </Link>
+          <Link
+            href={`/app/assessments/${id}/inspection`}
+            className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+          >
+            On-site inspection
+          </Link>
+        </div>
       </div>
 
       <StatusBanner error={error} success={success} />

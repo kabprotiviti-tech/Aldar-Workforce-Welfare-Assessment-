@@ -5,6 +5,8 @@ import { QUESTION_ANSWERS, COMPLIANCE_RATINGS, type ComplianceRating, type Quest
 import { validateQuestionResult, validateRatedEntity } from "@/lib/rules/validation";
 import { newMutationId } from "@/lib/inspection/queue";
 import { capturePhoto } from "@/lib/inspection/photo";
+import { PHOTO_CLASS_DEFINITIONS } from "@/lib/vision/classes";
+import { suggestedPhotoClass } from "@/lib/vision/suggest-class";
 import { SyncStatusBar, useInspectionQueue } from "@/components/inspection/sync-status";
 import { Button } from "@/components/ds/button";
 import { Pill } from "@/components/ds/pill";
@@ -352,16 +354,39 @@ function Photos({ assessmentId, area, onEnqueue }: { assessmentId: string; area:
   const [roomRef, setRoomRef] = useState("");
   const [queued, setQueued] = useState(0);
   const [busy, setBusy] = useState(false);
+  // What the assessor says they are photographing. It decides which
+  // closed field vocabulary the analysis uses later
+  // (lib/vision/classes.ts), so it is captured here, standing in front
+  // of the subject, rather than guessed from the image afterwards.
+  // Pre-set from the area where the area makes it obvious, and "" —
+  // a record shot, analysed for nothing — is always available.
+  const [photoClass, setPhotoClass] = useState<string>(suggestedPhotoClass(area.slNo) ?? "");
 
   return (
     <section>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-ds-ink-2">Photos</h3>
+      <label className="mt-1.5 block text-xs text-ds-ink-2" htmlFor={`photo-class-${area.assessmentItemId}`}>
+        What is this a photograph of?
+      </label>
+      <select
+        id={`photo-class-${area.assessmentItemId}`}
+        value={photoClass}
+        onChange={(event) => setPhotoClass(event.target.value)}
+        className="ds-focus-ring mt-1 w-full rounded-ds-control border border-ds-line bg-ds-surface px-2 py-2 text-sm text-ds-ink"
+      >
+        <option value="">Record shot — do not analyse</option>
+        {PHOTO_CLASS_DEFINITIONS.map((definition) => (
+          <option key={definition.photoClass} value={definition.photoClass}>
+            {definition.label}
+          </option>
+        ))}
+      </select>
       <input
         aria-label="Room reference for photos"
         placeholder="Room reference (optional)"
         value={roomRef}
         onChange={(event) => setRoomRef(event.target.value)}
-        className="ds-focus-ring mt-1.5 w-full rounded-ds-control border border-ds-line bg-ds-surface px-2 py-2 text-sm text-ds-ink"
+        className="ds-focus-ring mt-2 w-full rounded-ds-control border border-ds-line bg-ds-surface px-2 py-2 text-sm text-ds-ink"
       />
       {/* capture="environment" opens the rear camera directly on a phone
           rather than a file picker. */}
@@ -390,6 +415,7 @@ function Photos({ assessmentId, area, onEnqueue }: { assessmentId: string; area:
                 payload: {
                   requirement_id: area.requirementId,
                   room_ref: roomRef.trim(),
+                  photo_class: photoClass,
                   captured_at: captured.capturedAt,
                   geo_lat: captured.geoLat,
                   geo_lng: captured.geoLng,

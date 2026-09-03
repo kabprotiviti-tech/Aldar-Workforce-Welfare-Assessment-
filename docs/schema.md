@@ -496,3 +496,70 @@ Dedupe ledger for the reminder schedule (due date minus 3 days, on the
 due date, once overdue) — `unique(rfi_request_id, kind)` is what actually
 prevents a double-send, not application logic alone
 (`lib/rfi/send-reminders.ts`).
+
+## Photograph analysis
+`0026_photo_analysis.sql`. Vision analysis of inspection photographs. The
+constraint is the feature: a photograph is analysed for a closed list of
+classes and fields, it produces observations rather than answers, and
+nothing it reports reaches a rule until an assessor has confirmed it.
+
+### photo_class_names
+The eight classes a photograph may be analysed for — fire extinguisher,
+exit route, notice board, certificate or document, accommodation room,
+kitchen, ablution facilities, vehicle. A table rather than a check
+constraint because two columns reference it (`photos.photo_class` and
+`photo_analyses.photo_class`), and one source of truth beats two
+constraints that drift. `lib/vision/classes.ts` declares the same list
+alongside each class's fields; a drift test holds the two together.
+
+### photos.photo_class
+What the assessor says they photographed, captured on the phone at the
+same moment as the image and carried through the offline queue by
+`apply_inspection_mutation`. Nullable — a record shot is not analysed at
+all, which is a legitimate thing to capture.
+
+### photo_analyses
+One analysis run over one photograph. `findings` is the reading list the
+analyser kept after its guards ran; `raw_response` is what the model
+actually returned, kept as provenance and read by nothing downstream;
+`cannot_determine` is what this photograph cannot establish, part of the
+analysis rather than a footnote; `suppressed` records what the guards
+removed. `status` is `proposed` → `accepted`/`edited`/`rejected`, with a
+check constraint making the rejection reason required on a rejection and
+`edited_findings` required on an edit.
+
+### photo_analysis_confirmed
+The only read path for an analysis, the same shape and for the same
+reason as `fact_ledger_confirmed`: a proposed analysis has never been
+looked at and a rejected one was refused, and neither belongs near a
+report. `confirmed_findings` resolves which version is authoritative, so
+no consumer can read a superseded proposal by mistake. `security_invoker
+= true`, so the caller's own RLS applies. `tests/read-path.test.ts`
+proves no module reaches around it.
+
+### extracted_facts, second source
+`extraction_id`/`evidence_file_id` are now nullable and
+`photo_analysis_id` is the alternative, with
+`extracted_facts_one_source` requiring exactly one of the two.
+`fact_ledger_confirmed` gains `photo_analysis_id`/`photo_id` and resolves
+`assessment_id` from whichever source the fact came from — everything
+else about the view, including that it exposes only `confirmed_value`,
+is unchanged.
+
+### photo_derived_fact_keys
+The fixed list of fact keys a photograph may ever produce, mirrored in
+code by `PHOTO_DERIVED_FACT_KEYS`. The
+`extracted_facts_photo_derived_fact_key` trigger rejects any
+photo-sourced fact whose key is not in it — which is where "a bedroom
+photograph never yields an area or per-person value" stops being a code
+convention and becomes something no code path can work around, service
+role included.
+
+### resolve_photo_analysis
+Records the assessor's decision and, where they confirmed a printed
+reading, creates the facts it becomes — one transaction, for the same
+reason as `resolve_extracted_fact`. It refuses a rejection with no
+reason, a rejection that also produces facts, a second decision on an
+already-reviewed analysis, and a caller who is not staff. Derived facts
+are written at `accepted` with the assessor as `resolved_by`: they have
+just confirmed the reading against the photograph in front of them.
