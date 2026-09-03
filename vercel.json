@@ -7,6 +7,10 @@
     {
       "path": "/api/ai/sweep-stuck-jobs",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/findings/escalations",
+      "schedule": "0 6 * * *"
     }
   ]
 }

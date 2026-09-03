@@ -13,6 +13,15 @@ export const findingStatusSchema = z.enum([
 ]);
 export type FindingStatus = z.infer<typeof findingStatusSchema>;
 
+/**
+ * 0029_finding_lifecycle.sql — "accept closure, or reject with reason and
+ * a new due date." Two outcomes, not a spectrum: there is no third value
+ * for a partial closure, which is how "partial closure is explicitly not
+ * acceptance" is enforced — there's nothing to write for it.
+ */
+export const findingReviewerDecisionSchema = z.enum(["accepted", "rejected"]);
+export type FindingReviewerDecision = z.infer<typeof findingReviewerDecisionSchema>;
+
 export const findingRowSchema = z.object({
   id: uuidSchema,
   assessment_item_id: uuidSchema,
@@ -22,10 +31,18 @@ export const findingRowSchema = z.object({
   priority: findingPrioritySchema,
   owner_name: z.string().nullable(),
   owner_email: z.string().nullable(),
+  /** 0029_finding_lifecycle.sql — free-text; the owner is often a contractor with no entity_contacts row. */
+  owner_organisation: z.string().nullable(),
+  /** 0029_finding_lifecycle.sql — set only when the owner is a known entity contact; required to issue a closure portal link. */
+  owner_contact_id: uuidSchema.nullable(),
   due_date: dateSchema.nullable(),
   status: findingStatusSchema,
+  /** The owner's note, written alongside their closure evidence upload — not the evidence itself (see evidence_files.finding_id). */
   closure_evidence_text: z.string().nullable(),
-  reviewer_decision: z.string().nullable(),
+  reviewer_decision: findingReviewerDecisionSchema.nullable(),
+  reviewer_decision_reason: z.string().nullable(),
+  reviewer_decision_at: timestampSchema.nullable(),
+  reviewer_decision_by: uuidSchema.nullable(),
   closed_at: timestampSchema.nullable(),
   repeat_of_finding_id: uuidSchema.nullable(),
   created_at: timestampSchema,
@@ -35,7 +52,13 @@ export const findingRowSchema = z.object({
 });
 export type FindingRow = z.infer<typeof findingRowSchema>;
 
-/** Internal history behind a finding — staff-only, never exposed to a client_viewer. */
+/**
+ * Internal history behind a finding — staff-only, never exposed to a
+ * client_viewer. event_type stays free text at the database layer, the
+ * same "fixed vocabulary enforced at the app boundary" treatment as
+ * evidence_files.document_class — lib/findings/lifecycle.ts's
+ * FINDING_EVENT_TYPES is that vocabulary.
+ */
 export const findingEventRowSchema = z.object({
   id: uuidSchema,
   finding_id: uuidSchema,

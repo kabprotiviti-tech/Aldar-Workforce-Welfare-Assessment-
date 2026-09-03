@@ -8,6 +8,8 @@ import { detectRepeat, planCarryForwardDecision, previousFindingState } from "@/
 import type { FindingStatus } from "@/lib/db/findings";
 import type { DbModule } from "@/lib/db/common";
 import type { ComplianceRating } from "@/lib/rules/constants";
+import { derivedFindingPriority } from "@/lib/findings/priority";
+import { defaultFindingDueDate } from "@/lib/findings/due-date";
 
 /**
  * The assessor's writes on one requirement.
@@ -123,6 +125,7 @@ export async function saveDecision(
     await recordFindingForFailingDecision(supabase, {
       assessmentItemId,
       requirementId: data.requirement_id as string,
+      requirementSlNo: input.requirementSlNo,
       requirementTitle: decision.requirementTitle,
       status: decision.status,
       entityId: assessmentOfItem.entity_id,
@@ -171,16 +174,22 @@ async function mostRecentFindingForRequirement(
 /**
  * Creating the finding a Partial/Not Compliant decision needs to be
  * tracked to closure, and flagging it a repeat when this compliance
- * area was closed out and has now failed again (this prompt). Skipped
- * when the most recent finding for this area is already live and
- * belongs to this exact item — a re-save of the same failing decision
- * must not spawn a duplicate.
+ * area was closed out and has now failed again (this prompt: carry-
+ * forward). Skipped when the most recent finding for this area is
+ * already live and belongs to this exact item — a re-save of the same
+ * failing decision must not spawn a duplicate.
+ *
+ * Priority and due date are derived (lib/findings/priority.ts,
+ * lib/findings/due-date.ts), not hardcoded — this prompt: "finding
+ * lifecycle management." A "created" finding_events row is written in
+ * the same step, since a finding's timeline has to start somewhere.
  */
 async function recordFindingForFailingDecision(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   input: {
     assessmentItemId: string;
     requirementId: string;
+    requirementSlNo: number;
     requirementTitle: string;
     status: ComplianceRating;
     entityId: string;
@@ -192,16 +201,31 @@ async function recordFindingForFailingDecision(
   if (prior && prior.status !== "closed" && prior.assessmentItemId === input.assessmentItemId) return;
 
   const repeat = detectRepeat(input.status, prior?.id ?? null, prior?.status ?? null);
+  const priority = derivedFindingPriority(input.status, input.requirementSlNo);
+  const now = new Date().toISOString();
 
-  await supabase.from("findings").insert({
-    assessment_item_id: input.assessmentItemId,
-    entity_id: input.entityId,
-    facility_id: input.facilityId,
-    title: `${input.requirementTitle} — ${input.status}`,
-    priority: "medium",
-    status: "open",
-    repeat_of_finding_id: repeat.repeatOfFindingId,
-    created_by: input.actorId,
+  const { data: finding, error } = await supabase
+    .from("findings")
+    .insert({
+      assessment_item_id: input.assessmentItemId,
+      entity_id: input.entityId,
+      facility_id: input.facilityId,
+      title: `${input.requirementTitle} — ${input.status}`,
+      priority,
+      due_date: defaultFindingDueDate(priority, now),
+      status: "open",
+      repeat_of_finding_id: repeat.repeatOfFindingId,
+      created_by: input.actorId,
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  await supabase.from("finding_events").insert({
+    finding_id: finding.id,
+    event_type: "created",
+    actor_id: input.actorId,
+    note: repeat.isRepeat ? "Raised as a repeat of a previously closed finding." : null,
   });
 }
 

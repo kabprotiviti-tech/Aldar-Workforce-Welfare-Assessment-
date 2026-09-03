@@ -1818,3 +1818,94 @@ two levels instead: the pure logic they call (`lib/assessment/carry-forward.ts`,
 `lib/assessment/generate-items.ts`) in isolation, and the exact SQL they
 issue, run directly against real Postgres — the same posture every
 other server action in this codebase has been tested under.
+
+## Finding lifecycle management
+
+**Priority and due date are derived from what the code already knows,
+never a fifth free-text input for the assessor.** A finding's priority
+was hardcoded `"medium"` before this feature — this prompt asks for a
+real field, and the two inputs it needs (whether the requirement is one
+of the 10 key requirements, and whether the decision was Partial or Not
+Compliant) are both already fixed vocabulary by the time a finding is
+raised. `lib/findings/priority.ts`'s two-factor read — Not Compliant on
+a key requirement is "high," everything else that still fails is
+"medium" or "low" — is a judgment call, not something CONTEXT.md states
+directly; documented rather than left implicit. The due-date SLA
+(7/14/30 calendar days by priority, `lib/findings/due-date.ts`) is the
+same kind of call, deliberately calendar days rather than UAE working
+days, matching the RFI due date's own precedent.
+
+**Closing a finding requires closure evidence and a reviewer decision —
+enforced as a trigger, not only in `lib/findings/actions.ts`.** The same
+reasoning as `0024_assessment_decision.sql`: RLS can't stop the
+service-role/table-owner connection this app's own server code runs
+under from setting `status = 'closed'` without either. Both triggers
+(`enforce_finding_closure_requirements`, `enforce_finding_closed_immutability`)
+live in `0029_finding_lifecycle.sql` and are proven directly against
+Postgres in `tests/db/finding-lifecycle.test.ts` — the same posture as
+`tests/db/assessment-decision.test.ts` for the status-write guarantee.
+
+**A reopened finding has its closure record cleared by the trigger
+itself, not by the caller.** "Only reopened, which creates a new event"
+says nothing about what a reopened finding's `reviewer_decision` should
+read — leaving the old `accepted`/`rejected` value in place would let a
+reopened finding look reviewed (or worse, look closed-in-substance)
+before anyone has looked at it again. The trigger clears
+`reviewer_decision`, `reviewer_decision_reason`, `reviewer_decision_at`,
+`reviewer_decision_by` and `closed_at` in the same statement that flips
+`status` back to `open`, so there is no window where a "reopened"
+finding carries a stale decision.
+
+**The closure portal reuses `lib/rfi/token.ts`'s primitives directly,
+rather than a copy under `lib/findings/`.** `generatePortalToken`,
+`hashPortalToken`, `validateToken` and `isRateLimited` were already
+generic — nothing about them named RFI, only their file's location
+suggested otherwise. `finding_closure_tokens` /
+`finding_closure_token_access_log` are still separate tables from
+`rfi_tokens` / `rfi_token_access_log` (a different foreign key,
+`finding_id` instead of `rfi_request_id`), and the closure TTL is 30
+days rather than the RFI portal's 21 — closure evidence is a
+remediation, not a document handover, and routinely takes longer to
+assemble.
+
+**The closure portal's one action is "upload evidence and a note,"
+submitted together — there is no separate "mark evidence submitted"
+step from the owner's side.** The finding status enum still has five
+values (`open → in_progress → evidence_submitted → under_review →
+closed`), inherited from before this feature; the portal's single
+submission moves straight from whatever it started at to `under_review`,
+skipping `evidence_submitted` entirely, because there is no meaningful
+distinct state between "files attached" and "ready for a reviewer" from
+the owner's side of a tokenised link with no session to return to.
+`evidence_submitted` remains a real, reachable status — a staff member
+attaching evidence internally, ahead of a portal submission, could use
+it — just not one the portal itself ever writes.
+
+**"Any high-priority safety finding" is read as "any finding
+`lib/findings/priority.ts` derived as `high` priority."** This
+platform has no separate safety classification for findings, and a
+`high` priority already means Not Compliant on a key requirement — the
+worker-welfare-relevant failure mode this escalation rule exists to
+surface immediately, not just once it's overdue. Documented as an
+interpretation, not a literal reading of "safety," because CONTEXT.md
+never defines a "safety finding" as distinct from any other.
+
+**Assessment-owner and admin emails come from the Supabase Admin API
+(`auth.admin.getUserById`), not a table select.** `assessments.owner_id`
+and `public.users.role = 'admin'` both point at `auth.users`, which
+PostgREST can't embed across schemas — the same gap
+`lib/scheduling/portfolio.ts` already documents for portfolio owner
+names. Unlike a name, an email has no `public.users` fallback column at
+all, so the escalation sender (`lib/findings/send-escalations.ts`) calls
+the Admin API once per recipient rather than adding a column duplicating
+`auth.users`.
+
+**What was not tested: the actual Next.js server actions in
+`lib/findings/actions.ts` through a live request.** Same constraint as
+every other server action in this codebase (no cookie-based auth context
+in this sandbox) — proven instead at the two levels that don't need one:
+the pure logic each action calls (`lib/findings/lifecycle.ts`,
+`lib/findings/priority.ts`, `lib/findings/due-date.ts`,
+`lib/findings/escalation.ts`, `lib/findings/history.ts`) in isolation,
+and the database triggers/constraints that are the actual enforcement,
+proven directly against Postgres.

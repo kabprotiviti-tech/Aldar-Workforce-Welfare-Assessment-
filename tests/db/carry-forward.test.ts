@@ -136,6 +136,21 @@ describe.skipIf(!reachable)("carry-forward against a real database", () => {
     );
   }
 
+  /**
+   * Closes a finding the way lib/findings/actions.ts's reviewFindingClosure
+   * now requires: closure evidence on record, then a reviewer decision of
+   * 'accepted' — 0029_finding_lifecycle.sql's own triggers reject a bare
+   * `update ... set status = 'closed'` with neither.
+   */
+  async function closeFinding(itemId: string, findingId: string): Promise<void> {
+    const { rows } = await pool.query("select assessment_id from public.assessment_items where id = $1", [itemId]);
+    await pool.query(
+      "insert into public.evidence_files (assessment_id, finding_id, storage_path, original_name, mime_type, size_bytes, uploaded_by) values ($1, $2, 'closure/test.pdf', 'test.pdf', 'application/pdf', 100, $3)",
+      [rows[0]!.assessment_id, findingId, assessorId],
+    );
+    await pool.query("update public.findings set reviewer_decision = 'accepted', reviewer_decision_by = $1, status = 'closed' where id = $2", [assessorId, findingId]);
+  }
+
   /** Mirrors lib/assessment/actions.ts's markNotAssessedThisCycle. */
   async function markNotAssessedThisCycle(itemId: string): Promise<{ ok: true } | { ok: false; message: string }> {
     const { rows } = await pool.query("select previous_compliance_status from public.assessment_items where id = $1", [itemId]);
@@ -261,7 +276,7 @@ describe.skipIf(!reachable)("carry-forward against a real database", () => {
     await recordFindingForFailingDecision(firstItemId, "Correct overtime premium applied", "Partial");
 
     const finding = await mostRecentFinding(firstItemId);
-    await pool.query("update public.findings set status = 'closed', closed_at = now() where id = $1", [finding!.id]);
+    await closeFinding(firstItemId, finding!.id);
 
     const second = await createAssessment("2026-EP-FU-CF-4", first);
     const secondItemId = await generateItems(second, first);
@@ -316,7 +331,7 @@ describe.skipIf(!reachable)("carry-forward against a real database", () => {
     const originalFinding = await mostRecentFinding(firstItemId);
 
     // Cycle 2: the finding is closed and the item is genuinely reassessed as compliant.
-    await pool.query("update public.findings set status = 'closed', closed_at = now() where id = $1", [originalFinding!.id]);
+    await closeFinding(firstItemId, originalFinding!.id);
     const second = await createAssessment("2026-EP-FU-CF-6", first);
     const secondItemId = await generateItems(second, first);
     await decide(secondItemId, "Compliant", "Overtime premiums now correctly applied.", null);

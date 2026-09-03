@@ -247,6 +247,15 @@ vocabulary is enforced with a Zod schema (`documentClassSchema`,
 `lib/db/evidence.ts`) at the app boundary instead of a `check`
 constraint. See docs/decisions.md.
 
+`0029_finding_lifecycle.sql` adds `finding_id` — a third administrative
+sentinel value, `finding_closure_evidence`, joins `access_letter` and
+`rfi_upload` outside the business vocabulary. A closure-portal upload
+records `uploaded_by_contact_id` from the finding's own
+`owner_contact_id`, the same "never anything the uploader could
+self-report" reasoning as an RFI upload. This column is also
+0029's closure-requirement trigger's evidence check: a finding can only
+transition to `closed` once at least one row here references it.
+
 ### evidence_file_requirements
 Many-to-many, assessor-editable: which requirement(s) one evidence file
 counts as evidence for (this prompt: "link a file to one or more
@@ -505,17 +514,22 @@ saved on site is a photo lost.
 The two things CONTEXT.md says a client_viewer may see.
 
 ### findings
-An open item raised against one assessment item: priority, owner, due
-date, a five-stage status (`open` → `in_progress` → `evidence_submitted` →
-`under_review` → `closed`), and — for recurrence tracking —
-`repeat_of_finding_id`. A client_viewer sees findings for their own entity
-with `status <> 'closed'` ("open findings," read as "not yet closed" —
-see docs/decisions.md).
+An open item raised against one assessment item: priority, owner (name,
+email, `owner_organisation`, and — only when the owner is a known entity
+contact — `owner_contact_id`), due date, a five-stage status (`open` →
+`in_progress` → `evidence_submitted` → `under_review` → `closed`), and —
+for recurrence tracking — `repeat_of_finding_id`. A client_viewer sees
+findings for their own entity with `status <> 'closed'` ("open findings,"
+read as "not yet closed" — see docs/decisions.md).
 
 Written automatically by `lib/assessment/actions.ts`'s `saveDecision`
 whenever a fresh decision rates a requirement Partial or Not Compliant —
 one finding per compliance area kept live at a time (a re-save of the
-same failing decision does not spawn a duplicate). `repeat_of_finding_id`
+same failing decision does not spawn a duplicate). Priority and due date
+are derived, not asked of an assessor: `lib/findings/priority.ts` reads
+Not-Compliant-on-a-key-requirement as "high," and `lib/findings/due-date.ts`
+gives a high-priority finding a 7-day SLA, medium 14, low 30 (calendar
+days, the same choice already made for the RFI due date). `repeat_of_finding_id`
 is set when the most recent finding ever raised for this requirement,
 for this entity, was formally closed: that search walks the entity's
 whole history for the requirement, not just the immediately preceding
@@ -523,10 +537,56 @@ cycle, because a requirement can go fail → closed → compliant → fail
 again, with the closed finding that makes the second failure a *repeat*
 sitting further back than one hop. See docs/decisions.md.
 
+`0029_finding_lifecycle.sql` adds two guarantees as triggers, not
+application checks, on the same reasoning as `0024_assessment_decision.sql`:
+RLS can't stop the service-role/table-owner connection this app's own
+server code runs under from doing either by accident.
+- **Closing requires closure evidence and a reviewer decision.** A
+  transition into `status = 'closed'` is rejected unless
+  `reviewer_decision = 'accepted'` and at least one `evidence_files` row
+  references this finding (`evidence_files.finding_id`). A rejected
+  review never closes the finding — it's read back to `in_progress`
+  with `reviewer_decision_reason` and a new `due_date`. "Partial closure
+  is not acceptance" is enforced by `reviewer_decision` only ever holding
+  `accepted` or `rejected` — there's no third value to write for a
+  partial one.
+- **A closed finding is immutable except for a reopen.** Once
+  `status = 'closed'`, every update is rejected unless it is exactly
+  `status → 'open'` with every other column unchanged in the same
+  statement — the trigger itself clears `reviewer_decision`,
+  `reviewer_decision_reason`, `reviewer_decision_at`,
+  `reviewer_decision_by` and `closed_at` on that transition, since a
+  reopened finding needs fresh closure evidence and a fresh decision,
+  not the old ones surviving into a finding that reads as still closed.
+
 ### finding_events
-The internal history behind a finding (status changes, comments,
-escalations). Staff-only — this is the working trail, not the finding
-itself.
+The append-only timeline behind a finding — every state change
+(`created`, `owner_assigned`, `started`, `closure_submitted`,
+`reviewer_accepted`, `reviewer_rejected`, `reopened`, `escalated`), with
+actor and timestamp (`lib/findings/lifecycle.ts`'s `FINDING_EVENT_TYPES`
+is the fixed vocabulary, enforced at the app boundary the same way
+`evidence_files.document_class` is). Staff-only — this is the working
+trail, not the finding itself, which is what a client_viewer is scoped
+to see. Distinct from `audit_log`: this is a domain timeline for one
+finding, not a generic before/after record of every table's writes.
+
+### finding_closure_tokens / finding_closure_token_access_log
+The entity-facing closure portal's tokenised access — the RFI portal's
+own pattern (`rfi_tokens` / `rfi_token_access_log`), reused for a
+different parent (`finding_id`, not `rfi_request_id`). Only a SHA-256
+hash of the token is ever stored; no RLS policies at all, since a portal
+visitor has no Supabase session for RLS to apply to. `lib/rfi/token.ts`'s
+hash/validate/rate-limit primitives are imported directly rather than
+reimplemented — they were already generic. The owner submits closure
+evidence and a note as one action
+(`lib/findings/closure-portal.ts`/`closure-portal-supabase.ts`), which
+moves the finding to `under_review` — never straight to `closed`.
+
+### finding_escalations_sent
+Dedupe ledger for the escalation schedule (this prompt: 30 days overdue
+notifies the assessment owner, 60 days overdue or any high-priority
+finding notifies an admin) — the same unique-`(finding_id, kind)`-as-
+atomic-guard shape as `rfi_reminders_sent`.
 
 ### reports
 A generated report file for an assessment: version, format, storage path,
