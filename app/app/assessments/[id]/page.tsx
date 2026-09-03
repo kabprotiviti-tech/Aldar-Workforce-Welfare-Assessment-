@@ -3,13 +3,22 @@ import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { assignAssessmentOwner, recordActualVisitDate, updateVisitSchedule, uploadAccessLetter } from "@/lib/assessments/actions";
 import { issueRfiAction } from "@/lib/rfi/actions";
+import { buildCycleDiff } from "@/lib/assessment/carry-forward";
+import type { ComplianceRating } from "@/lib/rules/constants";
 import { Card } from "@/components/ds/card";
 import { Field } from "@/components/ds/field";
 import { Button } from "@/components/ds/button";
-import { Pill } from "@/components/ds/pill";
+import { Pill, type PillTone } from "@/components/ds/pill";
 import { Stat } from "@/components/ds/stat";
 import { EmptyState } from "@/components/ds/empty-state";
 import { StatusBanner } from "@/components/app/status-banner";
+
+const STATUS_TONE: Record<ComplianceRating, PillTone> = {
+  Compliant: "ok",
+  Partial: "warn",
+  "Not Compliant": "bad",
+  "Not Applicable": "neutral",
+};
 
 export default async function AssessmentDetailPage({
   params,
@@ -40,7 +49,7 @@ export default async function AssessmentDetailPage({
   const entityName = (assessment.entities as { name: string } | null)?.name;
   const facilityName = (assessment.facilities as { name: string } | null)?.name;
 
-  const [{ data: contacts }, { data: rfiRequests }] = await Promise.all([
+  const [{ data: contacts }, { data: rfiRequests }, { data: itemRows }] = await Promise.all([
     supabase.from("entity_contacts").select("id, name, email").eq("entity_id", assessment.entity_id).is("deleted_at", null),
     supabase
       .from("rfi_requests")
@@ -48,7 +57,31 @@ export default async function AssessmentDetailPage({
       .eq("assessment_id", id)
       .is("deleted_at", null)
       .order("issued_at", { ascending: false }),
+    // "A diff view: previous cycle status beside this cycle's status for
+    // all items, with changes highlighted" (this prompt).
+    supabase
+      .from("assessment_items")
+      .select("compliance_status, previous_compliance_status, was_assessed, requirements(sl_no, title)")
+      .eq("assessment_id", id),
   ]);
+
+  const cycleDiff = buildCycleDiff(
+    (itemRows ?? [])
+      .map((row) => {
+        const requirement = (Array.isArray(row.requirements) ? row.requirements[0] : row.requirements) as { sl_no: number; title: string } | null;
+        return requirement
+          ? {
+              requirementSlNo: requirement.sl_no,
+              requirementTitle: requirement.title,
+              previousStatus: row.previous_compliance_status as ComplianceRating | null,
+              currentStatus: row.compliance_status as ComplianceRating | null,
+              wasAssessed: row.was_assessed as boolean,
+            }
+          : null;
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null),
+  );
+  const hasPreviousCycle = cycleDiff.some((row) => row.previousStatus !== null);
 
   return (
     <div className="grid gap-8">
@@ -95,6 +128,41 @@ export default async function AssessmentDetailPage({
           <Stat label="Permission required" value={assessment.permission_required ? "Yes" : "No"} />
         </Card>
       </div>
+
+      {hasPreviousCycle && (
+        <div>
+          <p className="text-sm font-medium text-ds-ink">Cycle diff</p>
+          <p className="mt-1 text-xs text-ds-ink-2">Previous cycle status beside this cycle&apos;s, for every requirement. A changed row is highlighted.</p>
+          <div className="mt-3 overflow-x-auto rounded-ds-control border border-ds-line">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="bg-ds-surface-2 text-xs uppercase tracking-wide text-ds-ink-2">
+                  <th className="px-3 py-2">Requirement</th>
+                  <th className="px-3 py-2">Previous cycle</th>
+                  <th className="px-3 py-2">This cycle</th>
+                  <th className="px-3 py-2">Assessed this cycle?</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cycleDiff.map((row) => (
+                  <tr key={row.requirementSlNo} className={`border-t border-ds-line ${row.changed ? "bg-ds-accent-soft" : ""}`}>
+                    <td className="px-3 py-2 text-ds-ink">
+                      {row.requirementSlNo}. {row.requirementTitle}
+                    </td>
+                    <td className="px-3 py-2">
+                      {row.previousStatus ? <Pill tone={STATUS_TONE[row.previousStatus]}>{row.previousStatus}</Pill> : <span className="text-ds-ink-2">—</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      {row.currentStatus ? <Pill tone={STATUS_TONE[row.currentStatus]}>{row.currentStatus}</Pill> : <span className="text-ds-ink-2">Not yet decided</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-ds-ink-2">{row.wasAssessed ? "Yes" : "Carried forward"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <Card className="max-w-lg">
         <p className="text-sm font-medium text-ds-ink">Owner</p>

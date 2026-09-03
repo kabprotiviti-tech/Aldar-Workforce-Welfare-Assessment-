@@ -179,6 +179,22 @@ row in the same transaction, so neither depends on a caller remembering.
 They fire only on a status change, so drafting and detail capture are
 unaffected.
 
+### assessment_items (0028_carry_forward.sql)
+`previous_compliance_status`/`previous_remarks`/`previous_action_required`
+are a snapshot of the requirement's rating on the assessment
+`carried_forward_from_item_id` points at — written when the item is
+generated, alongside `was_assessed = false`. They exist as their own
+columns, separate from `compliance_status`/`remarks`/`action_required`,
+because those live columns can only ever be written by an authenticated
+assessor deciding a status (the trigger immediately above): populating
+them straight from last cycle's value at generation time would either
+need an actor who decided nothing, or misrepresent an inherited value as
+a fresh decision. The live columns are always set afterwards by an
+explicit assessor action — a genuine reassessment, or the "not assessed
+this cycle" confirmation (`lib/assessment/actions.ts`'s
+`markNotAssessedThisCycle`), which is itself a real decision even though
+the value it writes happens to equal last cycle's. See docs/decisions.md.
+
 ### interview_insights (0024_assessment_decision.sql)
 Workers interviewed, nationalities, whether an interpreter was used, and
 notes — one row per assessment item. A separate table rather than
@@ -495,6 +511,17 @@ date, a five-stage status (`open` → `in_progress` → `evidence_submitted` →
 `repeat_of_finding_id`. A client_viewer sees findings for their own entity
 with `status <> 'closed'` ("open findings," read as "not yet closed" —
 see docs/decisions.md).
+
+Written automatically by `lib/assessment/actions.ts`'s `saveDecision`
+whenever a fresh decision rates a requirement Partial or Not Compliant —
+one finding per compliance area kept live at a time (a re-save of the
+same failing decision does not spawn a duplicate). `repeat_of_finding_id`
+is set when the most recent finding ever raised for this requirement,
+for this entity, was formally closed: that search walks the entity's
+whole history for the requirement, not just the immediately preceding
+cycle, because a requirement can go fail → closed → compliant → fail
+again, with the closed finding that makes the second failure a *repeat*
+sitting further back than one hop. See docs/decisions.md.
 
 ### finding_events
 The internal history behind a finding (status changes, comments,

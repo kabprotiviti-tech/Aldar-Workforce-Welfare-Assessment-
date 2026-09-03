@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { dbComplianceRatingSchema } from "@/lib/db/assessments";
 import { evidenceDetailSchema, validateItemDecision, type ItemDecision } from "@/lib/assessment/decision";
+import { detectRepeat, planCarryForwardDecision, previousFindingState } from "@/lib/assessment/carry-forward";
+import type { FindingStatus } from "@/lib/db/findings";
+import type { DbModule } from "@/lib/db/common";
+import type { ComplianceRating } from "@/lib/rules/constants";
 
 /**
  * The assessor's writes on one requirement.
@@ -97,15 +101,158 @@ export async function saveDecision(
       compliance_status: decision.status,
       remarks: decision.remarks,
       action_required: decision.actionRequired,
+      // A genuine reassessment, however the item started out — flips a
+      // carried-forward item out of "not yet assessed this cycle" the
+      // moment the assessor actually assesses it.
+      was_assessed: true,
     })
     .eq("id", assessmentItemId)
-    .select("id, decided_at")
+    .select("id, requirement_id, decided_at, assessments(entity_id, facility_id)")
     .maybeSingle();
   if (error) {
     // The trigger's own message is the clearest thing to show here.
     return { ok: false, message: error.message };
   }
   if (!data) return { ok: false, message: "That requirement no longer exists, or you can't decide it." };
+
+  const assessmentOfItem = (Array.isArray(data.assessments) ? data.assessments[0] : data.assessments) as
+    | { entity_id: string; facility_id: string | null }
+    | null;
+
+  if ((decision.status === "Partial" || decision.status === "Not Compliant") && assessmentOfItem) {
+    await recordFindingForFailingDecision(supabase, {
+      assessmentItemId,
+      requirementId: data.requirement_id as string,
+      requirementTitle: decision.requirementTitle,
+      status: decision.status,
+      entityId: assessmentOfItem.entity_id,
+      facilityId: assessmentOfItem.facility_id,
+      actorId: userData.user.id,
+    });
+  }
+
+  revalidatePath(`/app/assessments/${assessmentId}/requirements/${assessmentItemId}`);
+  revalidatePath(`/app/assessments/${assessmentId}`);
+  return { ok: true };
+}
+
+/**
+ * The most recent, non-deleted finding raised for this exact compliance
+ * area — this requirement, for this entity — across every assessment
+ * cycle, not only the one immediately before this item.
+ *
+ * Walking the whole history rather than following
+ * `carried_forward_from_item_id` one hop back matters: a requirement can
+ * go fail -> closed -> compliant -> fail again, and the closed finding
+ * that makes the last failure a *repeat* sits two cycles back, on an
+ * item that isn't this one's direct carry-forward source. The same
+ * search also catches a finding nobody ever formally closed, however
+ * many compliant-looking cycles have passed since — which is exactly
+ * the case this prompt's "must be assessed" rule exists to prevent
+ * papering over.
+ */
+async function mostRecentFindingForRequirement(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  input: { entityId: string; requirementId: string },
+): Promise<{ id: string; status: FindingStatus; assessmentItemId: string } | null> {
+  const { data, error } = await supabase
+    .from("findings")
+    .select("id, status, assessment_item_id, assessment_items!inner(requirement_id)")
+    .eq("entity_id", input.entityId)
+    .eq("assessment_items.requirement_id", input.requirementId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { id: data.id as string, status: data.status as FindingStatus, assessmentItemId: data.assessment_item_id as string } : null;
+}
+
+/**
+ * Creating the finding a Partial/Not Compliant decision needs to be
+ * tracked to closure, and flagging it a repeat when this compliance
+ * area was closed out and has now failed again (this prompt). Skipped
+ * when the most recent finding for this area is already live and
+ * belongs to this exact item — a re-save of the same failing decision
+ * must not spawn a duplicate.
+ */
+async function recordFindingForFailingDecision(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  input: {
+    assessmentItemId: string;
+    requirementId: string;
+    requirementTitle: string;
+    status: ComplianceRating;
+    entityId: string;
+    facilityId: string | null;
+    actorId: string;
+  },
+): Promise<void> {
+  const prior = await mostRecentFindingForRequirement(supabase, { entityId: input.entityId, requirementId: input.requirementId });
+  if (prior && prior.status !== "closed" && prior.assessmentItemId === input.assessmentItemId) return;
+
+  const repeat = detectRepeat(input.status, prior?.id ?? null, prior?.status ?? null);
+
+  await supabase.from("findings").insert({
+    assessment_item_id: input.assessmentItemId,
+    entity_id: input.entityId,
+    facility_id: input.facilityId,
+    title: `${input.requirementTitle} — ${input.status}`,
+    priority: "medium",
+    status: "open",
+    repeat_of_finding_id: repeat.repeatOfFindingId,
+    created_by: input.actorId,
+  });
+}
+
+export interface MarkNotAssessedInput {
+  module: DbModule;
+}
+
+/**
+ * "Not assessed this cycle": retains the carried-forward status and
+ * writes the verbatim boilerplate — but only where carry-forward is
+ * actually permitted (this prompt's own acceptance criterion: an item
+ * with an open finding is blocked, with an explanation, rather than
+ * silently carried forward anyway).
+ */
+export async function markNotAssessedThisCycle(assessmentItemId: string, assessmentId: string, input: MarkNotAssessedInput): Promise<AssessmentActionResult> {
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, message: "Sign in required." };
+
+  const { data: item, error: itemError } = await supabase
+    .from("assessment_items")
+    .select("id, requirement_id, previous_compliance_status, assessments!inner(entity_id)")
+    .eq("id", assessmentItemId)
+    .maybeSingle();
+  if (itemError) return { ok: false, message: itemError.message };
+  if (!item) return { ok: false, message: "That requirement no longer exists." };
+
+  const assessmentOfItem = (Array.isArray(item.assessments) ? item.assessments[0] : item.assessments) as { entity_id: string } | null;
+  const finding = assessmentOfItem
+    ? await mostRecentFindingForRequirement(supabase, { entityId: assessmentOfItem.entity_id, requirementId: item.requirement_id as string })
+    : null;
+
+  const plan = planCarryForwardDecision(
+    input.module,
+    item.previous_compliance_status as ComplianceRating | null,
+    previousFindingState(finding?.status ?? null),
+  );
+  if (!plan.ok) {
+    return { ok: false, message: plan.message };
+  }
+
+  const { error } = await supabase
+    .from("assessment_items")
+    .update({
+      compliance_status: plan.decision.status,
+      remarks: plan.decision.remarks,
+      action_required: plan.decision.actionRequired,
+      was_assessed: false,
+    })
+    .eq("id", assessmentItemId);
+  if (error) return { ok: false, message: error.message };
 
   revalidatePath(`/app/assessments/${assessmentId}/requirements/${assessmentItemId}`);
   revalidatePath(`/app/assessments/${assessmentId}`);

@@ -10,6 +10,9 @@ import { readingSummary } from "@/lib/vision/store";
 import type { AnalysedReading } from "@/lib/vision/analyse";
 import { RequirementNav, type RequirementNavItem } from "@/components/assessment/requirement-nav";
 import { DecisionForm } from "@/components/assessment/decision-form";
+import { CarryForwardPanel } from "@/components/assessment/carry-forward-panel";
+import type { DbModule } from "@/lib/db/common";
+import type { FindingStatus } from "@/lib/db/findings";
 import { Pill, type PillTone } from "@/components/ds/pill";
 import { EmptyState } from "@/components/ds/empty-state";
 
@@ -37,7 +40,7 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
   const { data: item } = await supabase
     .from("assessment_items")
     .select(
-      "id, assessment_id, requirement_id, compliance_status, remarks, action_required, assessor_observations, office_visit_observations, draft_updated_at, evidence_detail, decided_at, requirements(sl_no, title, is_key, detail_text)",
+      "id, assessment_id, requirement_id, compliance_status, remarks, action_required, was_assessed, previous_compliance_status, previous_remarks, previous_action_required, carried_forward_from_item_id, assessor_observations, office_visit_observations, draft_updated_at, evidence_detail, decided_at, requirements(sl_no, title, is_key, detail_text)",
     )
     .eq("id", itemId)
     .eq("assessment_id", id)
@@ -51,9 +54,18 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
     notFound();
   }
 
-  const [{ data: assessment }, { data: siblingRows }, { data: linkRows }, { data: evaluationRows }, { data: factRows }, observations, { data: photoAnalysisRows }, { data: interviewRow }] =
-    await Promise.all([
-      supabase.from("assessments").select("subject_code, entities(name), facilities(name)").eq("id", id).maybeSingle(),
+  const [
+    { data: assessment },
+    { data: siblingRows },
+    { data: linkRows },
+    { data: evaluationRows },
+    { data: factRows },
+    observations,
+    { data: photoAnalysisRows },
+    { data: interviewRow },
+    { data: carrySourceFinding },
+  ] = await Promise.all([
+      supabase.from("assessments").select("subject_code, module, entities(name), facilities(name)").eq("id", id).maybeSingle(),
       supabase
         .from("assessment_items")
         .select("id, compliance_status, remarks, action_required, requirements(sl_no, title, is_key)")
@@ -82,6 +94,19 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
         .select("workers_interviewed_count, nationalities, interpreter_used, notes")
         .eq("assessment_item_id", itemId)
         .maybeSingle(),
+      // The finding tied to the item this one carries forward from, if
+      // any — what checkCarryForwardEligibility needs to say whether
+      // "not assessed this cycle" is actually permitted here.
+      item.carried_forward_from_item_id
+        ? supabase
+            .from("findings")
+            .select("status")
+            .eq("assessment_item_id", item.carried_forward_from_item_id)
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
     ]);
 
   const entityName =
@@ -171,6 +196,17 @@ export default async function RequirementAssessmentPage({ params }: { params: Pr
             </p>
           </div>
         </header>
+
+        <CarryForwardPanel
+          assessmentId={id}
+          assessmentItemId={itemId}
+          module={(assessment?.module as DbModule | undefined) ?? "employment_practices"}
+          currentStatus={(item.compliance_status as ComplianceRating | null) ?? null}
+          previousStatus={(item.previous_compliance_status as ComplianceRating | null) ?? null}
+          previousRemarks={(item.previous_remarks as string | null) ?? null}
+          previousActionRequired={(item.previous_action_required as string | null) ?? null}
+          carrySourceFindingStatus={(carrySourceFinding?.status as FindingStatus | null) ?? null}
+        />
 
         <section>
           <h2 className="text-sm font-semibold text-ds-ink">Evidence reviewed</h2>

@@ -1726,3 +1726,95 @@ Postgres, driving the pure functions with rows read from it. The gap is
 the two adapters that call `supabase.rpc(...)` from a real session,
 which is exactly why neither adapter carries any logic beyond the call
 itself.
+
+## Carry-forward from the previous assessment cycle
+
+**Pre-populating an item never writes the live `compliance_status`, even
+at generation time.** 0024's own trigger guarantees a status is only
+ever written by an authenticated assessor deciding it, stamped and
+audited as that decision. Writing last cycle's status straight into
+`compliance_status` when an item is created would either need an actor
+who decided nothing (the bulk cycle-generation step has no assessor
+sitting at it), or would misrepresent an inherited value as a fresh
+decision. `previous_compliance_status`/`previous_remarks`/
+`previous_action_required` (0028_carry_forward.sql) are a separate
+snapshot for reference and for the eligibility check; the live columns
+are always set afterwards by an explicit act — a genuine reassessment,
+or the "not assessed this cycle" confirmation, which is itself a real
+decision even though the value it writes happens to equal last cycle's.
+This is the same reasoning, one level up, as the fact ledger's own
+proposed/confirmed split.
+
+**Not Applicable carries forward the same way Compliant does — beyond
+what CONTEXT.md's boilerplate literally covers.** The prompt names only
+two categories ("the previous status was Compliant, or a finding was
+formally closed"). There is no compliance gap behind Not Applicable to
+have closed, so blocking it would force re-litigating a requirement that
+never applied, for no value. A deliberate inclusion, not an oversight —
+CONTEXT.md gives no boilerplate wording for it either, so the module's
+only boilerplate entries stay exactly the two it specifies.
+
+**Onboarding has no carry-forward boilerplate.** CONTEXT.md's
+"Carry-forward boilerplate" section gives wording for Employment
+Practices and Accommodation only. `boilerplateFor("onboarding")` returns
+null and `planCarryForwardDecision` refuses rather than inventing
+wording CONTEXT.md never specified — consistent with this project's
+standing rule against inventing regulatory or client-facing text.
+
+**Repeat detection searches the requirement's whole history for this
+entity, not one hop back through `carried_forward_from_item_id`.** The
+first version only checked the immediately preceding item's own
+findings, which breaks the moment a requirement goes fail → closed →
+compliant → fail again: the compliant cycle in the middle has no
+finding of its own, so a one-hop lookup from the second failure finds
+nothing and misses that it's a repeat. `mostRecentFindingForRequirement`
+(`lib/assessment/actions.ts`) instead joins `findings` to
+`assessment_items` on `requirement_id`, scoped to the entity, and takes
+the most recent row regardless of which cycle's item it was raised
+against. The same search also means an open finding nobody ever
+formally closed keeps blocking carry-forward however many
+compliant-looking cycles have passed since — exactly the case this
+prompt's "must be assessed" rule exists to prevent papering over. Caught
+by a DB test that specifically exercises the two-cycles-back case; the
+one-hop version passed every eligibility test but failed the repeat one.
+
+**A finding is created automatically on a fresh Partial/Not Compliant
+decision — a new, minimal piece, not the full findings workflow.**
+Nothing in this codebase created a `findings` row before this feature
+(owner assignment, due dates, evidence submission and closure review
+remain unbuilt). Repeat detection needs *something* to search for, so
+`saveDecision` now opens one finding, at default priority, whenever a
+decision fails and no live finding already exists for that compliance
+area — the smallest correct complement to the existing "Partial/Not
+Compliant requires an action required for closure" validation, not an
+attempt to build finding management. Closing a finding remains a direct
+database operation until that workflow exists; the DB test does this by
+hand (`update findings set status = 'closed'`) to exercise carry-forward
+eligibility, which is the honest state of what's built.
+
+**Eligibility is enforced in application code, not a database
+constraint.** Every other per-feature validation this codebase has
+built — the remark/closure-action rules from CONTEXT.md's compliance
+ratings section, for one — lives in application code (`validateRatedEntity`)
+rather than a trigger, and carry-forward eligibility is a feature-specific
+rule of the same kind, not one of CONTEXT.md's seven numbered
+non-negotiables. `markNotAssessedThisCycle` is the only write path for a
+carried-forward decision, and it always evaluates
+`checkCarryForwardEligibility` before writing — but nothing stops a
+different write path from bypassing the check the way 0024's trigger
+stops a status write without an assessor. Documented here as a
+conscious scope decision rather than a gap that went unnoticed.
+
+**The cycle diff lives on the assessment overview and requirement
+pages, not a report document.** "A diff view... for all items" and
+"prior open actions surfaced at the top... for each requirement" are
+both met by screens that already exist in this codebase — no
+report-generation code exists yet to add a diff into.
+
+**What was not tested: the actual Next.js server actions
+(`saveDecision`, `markNotAssessedThisCycle`) through a live request.**
+No cookie-based auth context exists in this sandbox. Both are proven at
+two levels instead: the pure logic they call (`lib/assessment/carry-forward.ts`,
+`lib/assessment/generate-items.ts`) in isolation, and the exact SQL they
+issue, run directly against real Postgres — the same posture every
+other server action in this codebase has been tested under.
