@@ -1357,3 +1357,89 @@ discipline.** `listConfirmedObservations` filters to `confirmed`;
 and the workspace is where the assessment is made. Proven on real rows,
 including that a rejected one is retained but invisible, and that the
 query is scoped to one requirement's own item.
+
+## The assessment screen
+
+`app/app/assessments/[id]/requirements/[itemId]/`, `lib/assessment/`,
+`supabase/migrations/0024_assessment_decision.sql`. One page per
+requirement, where the assessment is actually made.
+
+**The status guarantee is a trigger, not an RLS policy.** This prompt
+asks to prove that "a status cannot be written by any code path other
+than an authenticated assessor action" with a test that attempts a
+service-level write and fails — and RLS cannot deliver that, because the
+service-role client and the table owner both bypass it by design. A
+policy would have been a promise the app's own privileged code could
+break at any time. The trigger binds every writer equally, and the test
+attempts the write through the admin pool (the table owner, connecting as
+a superuser) and watches it fail.
+
+**The trigger also stamps and audits, so neither can be forgotten.**
+`decided_by`/`decided_at` come from `auth.uid()` inside the trigger, and
+the `audit_log` row is inserted in the same transaction as the decision.
+"Saving a status writes decided_by and decided_at and an audit_log row"
+is then true of every code path that ever sets one, including ones not
+written yet.
+
+**Two triggers, not one: insert as well as update.** A row created
+already carrying a status would have been a way straight around an
+update-only guard.
+
+**It fires only on a status change.** Drafting, detail capture and
+carry-forward housekeeping are untouched — a background job or a service
+path can still autosave, which matters because the autosave path is
+deliberately unprivileged.
+
+**Three layers catch three different callers, and the test says which.**
+RLS filters a `client_viewer`'s update to zero rows before the trigger
+runs; the trigger catches a `qa_reviewer`, who passes `is_staff()` and so
+passes RLS but fails `can_write_operational()`; and the trigger catches
+the unauthenticated service path. The test asserts the *outcome* for the
+viewer (no status written) rather than which layer caught it, and covers
+the qa_reviewer case separately so the trigger's own check is genuinely
+exercised.
+
+**Drafts autosave to the server, not to localStorage.** "Draft text
+survives a browser refresh" is met by the text genuinely living in the
+database and being rendered from it on load — which also survives a
+crashed tab, a closed laptop and a different device. The autosave is
+debounced at 1.5s and skips the first render, so opening a page to read
+it doesn't stamp `draft_updated_at` for someone who only looked.
+
+**Interview notes are a separate table with no client_viewer policy.**
+"Stored separately and never included in the entity-visible report" is
+not a convention attached to a column here. A client_viewer's own session
+returns zero rows, proven in the DB test, and the report builder would
+have to deliberately join a table it has no reason to touch. Workers
+spoke to an assessor in confidence and the assessed entity is the party
+they may most need protection from — so the guarantee is structural.
+
+**Validation is reused, not reimplemented.** The remark and
+closure-action rules are `lib/rules/validation.ts`'s `validateRatedEntity`
+from the first phase of this project. `lib/assessment/decision.ts` adds
+only what this screen needs: naming the requirement in the message
+("Requirement 11 (Timely wage payment): ..."), and turning items into the
+navigation's completion state. A second copy of the compliance rules
+would be a second place for them to drift.
+
+**"Incomplete" is a distinct navigation state from "not started".** A
+status chosen but the required remark still missing is exactly what an
+assessor loses track of across 23 requirements, and it is invisible from
+the status alone.
+
+**A missing status is itself a validation issue.** An unrated requirement
+is not a finished one, and the aggregate percentages would otherwise
+silently exclude it.
+
+**Specific detail is structured jsonb, not prose.** Salary transfer
+dates, deduction examples with amounts, and sample sizes as "12 of 120"
+— validated by a Zod schema at the boundary, and rendered back on the
+page so an assessor can see what the report will actually contain. A
+column per kind would have been a wide table of mostly-null columns; the
+shapes differ per requirement and will grow.
+
+**The page renders the rule working, not a verdict.** Each rule result
+shows its computed explanation and its legal reference; observations show
+their narrative and source. The status control is empty until a person
+fills it, and the statement "Final assessment decisions are made by the
+assessor." sits next to that control rather than in a footer.

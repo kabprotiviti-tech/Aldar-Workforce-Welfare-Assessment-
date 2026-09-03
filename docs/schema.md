@@ -158,6 +158,37 @@ Not Applicable answer, so it lives on the item, not on one question's
 answer. Shape validated by the per-area schemas in
 `lib/db/accommodation-quantitative.ts`.
 
+### assessment_items (0024_assessment_decision.sql)
+`assessor_observations`, `office_visit_observations` and
+`draft_updated_at` hold the assessor's drafting, autosaved server-side —
+a draft has to survive a refresh, a crashed tab and a different device,
+which browser storage does not. `evidence_detail` is the structured
+"numbers, not adjectives" capture (salary transfer dates, deduction
+examples, sample sizes), validated by `evidenceDetailSchema`
+(`lib/assessment/decision.ts`).
+
+**A compliance_status can only be written by an authenticated assessor**,
+enforced by the `assessment_items_status_requires_assessor` and
+`assessment_items_insert_status_requires_assessor` triggers rather than
+by RLS. RLS could not deliver it: the service-role client and the table
+owner both bypass row-level security by design, so a policy would be a
+promise the app's own privileged code could break. The triggers bind
+every writer equally — service role, superuser, future background job —
+and they also stamp `decided_by`/`decided_at` and write the `audit_log`
+row in the same transaction, so neither depends on a caller remembering.
+They fire only on a status change, so drafting and detail capture are
+unaffected.
+
+### interview_insights (0024_assessment_decision.sql)
+Workers interviewed, nationalities, whether an interpreter was used, and
+notes — one row per assessment item. A separate table rather than
+columns, because "never included in the entity-visible report" needs to
+be structural: there is deliberately **no client_viewer select policy**,
+so the strongest read path a client has returns nothing, and a report
+builder has to join a table it has no reason to touch. Workers spoke to
+an assessor in confidence, and the entity being assessed is the party
+they may most need protection from.
+
 ### assessment_answers
 One row per question within one assessment item, for the modules that
 work question-by-question (Employment Practices/Onboarding). Rolls up
