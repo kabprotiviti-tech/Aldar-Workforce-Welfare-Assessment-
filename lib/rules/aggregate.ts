@@ -11,15 +11,31 @@ import type { CycleRatedEntity, RequirementAssessment } from "./types";
  * The exact scoring/risk formulas are not specified in the client's report
  * format, only the three figures that must appear. The choices below are
  * documented assumptions (see docs/decisions.md) and are isolated here so
- * they can be swapped without touching validation or callers.
+ * they can be swapped without touching validation or callers. The weights
+ * themselves are configurable (`0032_scoring_weights.sql` — admin-editable,
+ * versioned, the same pattern as `rule_definitions`) rather than the fixed
+ * constant this module used to carry: every caller now passes the weight
+ * record a report was actually generated under, so "which weights produced
+ * this percentage" is always a stored fact, not an assumption baked into
+ * the code. See docs/decisions.md — the client's own formula still needs
+ * confirming; these are a starting default, not a verified match.
  */
 
-/** Not Applicable is excluded from scoring entirely — it is not a compliance measurement. */
-const RATING_SCORE: Record<Exclude<ComplianceRating, "Not Applicable">, number> = {
-  Compliant: 1,
-  Partial: 0.5,
-  "Not Compliant": 0,
-};
+/** compliant/partial/notCompliant weights. Not Applicable has no weight — it is excluded from scoring entirely, never given a value of 0. */
+export interface ScoringWeights {
+  compliant: number;
+  partial: number;
+  notCompliant: number;
+}
+
+/** `0032_scoring_weights.sql`'s seeded version 1 — Compliant 1.0, Partial 0.5, Not Compliant 0, matching this module's original hardcoded values. */
+export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = { compliant: 1, partial: 0.5, notCompliant: 0 };
+
+function weightFor(rating: Exclude<ComplianceRating, "Not Applicable">, weights: ScoringWeights): number {
+  if (rating === "Compliant") return weights.compliant;
+  if (rating === "Partial") return weights.partial;
+  return weights.notCompliant;
+}
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -35,12 +51,12 @@ function isScorable(rating: ComplianceRating): rating is Exclude<ComplianceRatin
  * scorable to report — callers should render "cannot be determined from this
  * evidence" rather than a fabricated number.
  */
-export function compliancePercentFromRatings(ratings: ComplianceRating[]): number | null {
+export function compliancePercentFromRatings(ratings: ComplianceRating[], weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS): number | null {
   const scorable = ratings.filter(isScorable);
   if (scorable.length === 0) {
     return null;
   }
-  const total = scorable.reduce((sum, rating) => sum + RATING_SCORE[rating], 0);
+  const total = scorable.reduce((sum, rating) => sum + weightFor(rating, weights), 0);
   return round2((total / scorable.length) * 100);
 }
 
@@ -49,8 +65,11 @@ export function compliancePercentFromRatings(ratings: ComplianceRating[]): numbe
  * the cycle, including items carried forward (not assessed this cycle) at
  * their inherited rating.
  */
-export function computeOverallCompliancePercent(entities: CycleRatedEntity[]): number | null {
-  return compliancePercentFromRatings(entities.map((entity) => entity.rating));
+export function computeOverallCompliancePercent(entities: CycleRatedEntity[], weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS): number | null {
+  return compliancePercentFromRatings(
+    entities.map((entity) => entity.rating),
+    weights,
+  );
 }
 
 /**
@@ -60,9 +79,13 @@ export function computeOverallCompliancePercent(entities: CycleRatedEntity[]): n
  */
 export function computeComplianceAdjustedForNotAssessedPercent(
   entities: CycleRatedEntity[],
+  weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
 ): number | null {
   const assessedThisCycle = entities.filter((entity) => entity.assessedThisCycle);
-  return compliancePercentFromRatings(assessedThisCycle.map((entity) => entity.rating));
+  return compliancePercentFromRatings(
+    assessedThisCycle.map((entity) => entity.rating),
+    weights,
+  );
 }
 
 /**

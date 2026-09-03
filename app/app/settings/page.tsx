@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { createPublicHoliday, removePublicHoliday } from "@/lib/settings/actions";
+import { createPublicHoliday, removePublicHoliday, reviseScoringWeights } from "@/lib/settings/actions";
 import { Card } from "@/components/ds/card";
 import { Field } from "@/components/ds/field";
 import { Button } from "@/components/ds/button";
@@ -11,11 +11,15 @@ import { StatusBanner } from "@/components/app/status-banner";
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
   const supabase = await createSupabaseServerClient();
-  const { data: holidays } = await supabase
-    .from("public_holidays")
-    .select("id, holiday_date, name")
-    .is("deleted_at", null)
-    .order("holiday_date");
+  const [{ data: holidays }, { data: scoringWeights }] = await Promise.all([
+    supabase.from("public_holidays").select("id, holiday_date, name").is("deleted_at", null).order("holiday_date"),
+    supabase
+      .from("scoring_weights")
+      .select("version, compliant_weight, partial_weight, not_compliant_weight")
+      .eq("active", true)
+      .is("deleted_at", null)
+      .maybeSingle(),
+  ]);
 
   return (
     <div className="grid gap-8">
@@ -37,6 +41,58 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         >
           Manage RFI templates
         </Link>
+      </div>
+
+      <div>
+        <p className="text-sm font-medium text-ds-ink">Compliance scoring weights</p>
+        <p className="mt-1 text-sm text-ds-ink-2">
+          What Compliant/Partial/Not Compliant are worth in the report&apos;s Overall Compliance (%) and Compliance
+          adjusted for not assessed (%) — Not Applicable is always excluded from scoring. Editing these creates a new
+          version; every report already generated keeps the version it actually used (see docs/decisions.md — the
+          client&apos;s exact formula still needs confirming, these are a starting default).
+        </p>
+        <Card className="mt-4 max-w-lg">
+          {scoringWeights ? (
+            <form action={reviseScoringWeights} className="grid gap-4">
+              <p className="text-xs text-ds-ink-2">Current version: {scoringWeights.version}</p>
+              <Field
+                label="Compliant weight"
+                name="compliant_weight"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                defaultValue={scoringWeights.compliant_weight}
+                required
+              />
+              <Field
+                label="Partial weight"
+                name="partial_weight"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                defaultValue={scoringWeights.partial_weight}
+                required
+              />
+              <Field
+                label="Not Compliant weight"
+                name="not_compliant_weight"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                defaultValue={scoringWeights.not_compliant_weight}
+                required
+              />
+              <Button type="submit" variant="secondary" className="justify-self-start">
+                Save as new version
+              </Button>
+            </form>
+          ) : (
+            <p className="text-sm text-ds-ink-2">No scoring weights configured.</p>
+          )}
+        </Card>
       </div>
 
       <div>

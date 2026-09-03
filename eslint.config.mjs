@@ -66,6 +66,19 @@ const config = [
       "local/no-hardcoded-hex": "error",
     },
   },
+  {
+    // lib/reports/pdf.ts draws directly into a PDF canvas via pdfkit,
+    // which has no CSS/DOM styling system to defer to — doc.fillColor()
+    // only ever accepts a literal color value, there is no var()
+    // equivalent. The rule's actual concern (one source of truth for
+    // color, not scattered literals) still holds here: every color in
+    // that file comes from one local COLORS map, itself copied verbatim
+    // from CONTEXT.md's own design-language palette rather than invented.
+    files: ["lib/reports/pdf.ts"],
+    rules: {
+      "local/no-hardcoded-hex": "off",
+    },
+  },
 ];
 
 export default config;

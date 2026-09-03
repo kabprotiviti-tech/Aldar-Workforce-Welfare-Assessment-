@@ -77,6 +77,8 @@ export const reportRowSchema = z.object({
   storage_path: z.string(),
   /** 0030_governance.sql — the report's own content, not just a pointer to the Storage file. See lib/reports/snapshot.ts. */
   snapshot: z.unknown(),
+  /** 0032_scoring_weights.sql — which weights version produced this report's Risk/Overall/Adjusted figures. */
+  scoring_weights_id: uuidSchema.nullable(),
   generated_at: timestampSchema,
   generated_by: uuidSchema.nullable(),
   is_current: z.boolean(),

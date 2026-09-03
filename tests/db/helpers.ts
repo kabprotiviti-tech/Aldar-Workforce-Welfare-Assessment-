@@ -54,6 +54,9 @@ const MIGRATION_FILES = [
   // 0031_reports_bucket.sql is deliberately excluded: it operates on
   // storage.buckets/storage.objects, which only exist in a real
   // Supabase project, not this local Postgres stand-in.
+  "supabase/migrations/0032_scoring_weights.sql",
+  // 0033_reports_bucket_pdf.sql is deliberately excluded for the same
+  // reason as 0031: it also operates on storage.buckets.
 ];
 
 /**

@@ -51,8 +51,14 @@ export default async function CycleDetailPage({
           <p className="mt-1 text-sm text-ds-ink-2">{cycle.year}</p>
         </div>
         <Pill tone={cycle.closed_at ? "neutral" : "ok"}>{cycle.closed_at ? "Closed" : "Open"}</Pill>
+        <a
+          href={`/app/cycles/${cycle.id}/tracker`}
+          className="ds-focus-ring ml-auto inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+        >
+          Download tracker
+        </a>
         {!cycle.closed_at && (
-          <form action={closeCycle.bind(null, cycle.id)} className="ml-auto">
+          <form action={closeCycle.bind(null, cycle.id)}>
             <Button type="submit" variant="secondary">
               Close cycle
             </Button>

@@ -30,6 +30,7 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
   let requirementId: string;
   let entityId: string;
   let cycleId: string;
+  let scoringWeightsId: string;
 
   async function createUser(role: string): Promise<string> {
     const user = await pool.query<{ id: string }>("insert into auth.users default values returning id");
@@ -61,8 +62,8 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
     await pool.query("update public.assessments set qa_status = 'passed' where id = $1", [assessmentId]);
     const result = await asUser(pool, adminId, (client) =>
       client.query<{ approve_assessment_and_generate_report: string }>(
-        "select public.approve_assessment_and_generate_report($1, $2, $3::jsonb, 'json') as approve_assessment_and_generate_report",
-        [assessmentId, `${assessmentId}/v1.json`, JSON.stringify({ header: { subjectCode }, rows: [] })],
+        "select public.approve_assessment_and_generate_report($1, $2, $3::jsonb, 'json', $4, 'Low', 100, 100) as approve_assessment_and_generate_report",
+        [assessmentId, `${assessmentId}/v1.json`, JSON.stringify({ header: { subjectCode }, rows: [] }), scoringWeightsId],
       ),
     );
     return { assessmentId, itemId, reportId: result.rows[0]!.approve_assessment_and_generate_report };
@@ -88,6 +89,9 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
       "insert into public.entities (name, entity_code, type) values ('Governance Entity', 'GOV-1', 'general_contractor') returning id",
     );
     entityId = entity.rows[0]!.id;
+
+    const weights = await pool.query<{ id: string }>("select id from public.scoring_weights where active and deleted_at is null");
+    scoringWeightsId = weights.rows[0]!.id;
   });
 
   afterAll(async () => {
@@ -218,7 +222,10 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
 
       await expect(
         asUser(pool, assessorId, (client) =>
-          client.query("select public.approve_assessment_and_generate_report($1, 'x', '{}'::jsonb, 'json')", [assessmentId]),
+          client.query("select public.approve_assessment_and_generate_report($1, 'x', '{}'::jsonb, 'json', $2, 'Low', 100, 100)", [
+            assessmentId,
+            scoringWeightsId,
+          ]),
         ),
       ).rejects.toThrow(/only an admin may approve/);
     });
@@ -227,7 +234,10 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
       const { assessmentId } = await createAssessment("2026-EP-IN-GOV-RPC2");
       await expect(
         asUser(pool, adminId, (client) =>
-          client.query("select public.approve_assessment_and_generate_report($1, 'x', '{}'::jsonb, 'json')", [assessmentId]),
+          client.query("select public.approve_assessment_and_generate_report($1, 'x', '{}'::jsonb, 'json', $2, 'Low', 100, 100)", [
+            assessmentId,
+            scoringWeightsId,
+          ]),
         ),
       ).rejects.toThrow(/only be approved once QA has passed/);
     });
@@ -311,8 +321,8 @@ describe.skipIf(!reachable)("governance layer against a real database", () => {
 
       const approveResult = await asUser(pool, adminId, (client) =>
         client.query<{ approve_assessment_and_generate_report: string }>(
-          "select public.approve_assessment_and_generate_report($1, $2, $3::jsonb, 'json') as approve_assessment_and_generate_report",
-          [assessmentId, `${assessmentId}/v2.json`, JSON.stringify({ header: {}, rows: [{ remarks: "Revised remark." }] })],
+          "select public.approve_assessment_and_generate_report($1, $2, $3::jsonb, 'json', $4, 'Low', 100, 100) as approve_assessment_and_generate_report",
+          [assessmentId, `${assessmentId}/v2.json`, JSON.stringify({ header: {}, rows: [{ remarks: "Revised remark." }] }), scoringWeightsId],
         ),
       );
       const reportV2 = approveResult.rows[0]!.approve_assessment_and_generate_report;

@@ -55,6 +55,25 @@ export const ruleEvaluationRowSchema = z.object({
 });
 export type RuleEvaluationRow = z.infer<typeof ruleEvaluationRowSchema>;
 
+/**
+ * 0032_scoring_weights.sql — the compliance-percentage weights, versioned
+ * the same way rule_definitions is: an edit supersedes with a new
+ * version rather than mutating; at most one version is active; a
+ * version referenced by a report is immutable except `active`.
+ */
+export const scoringWeightsRowSchema = z.object({
+  id: uuidSchema,
+  version: z.number().int(),
+  compliant_weight: z.number(),
+  partial_weight: z.number(),
+  not_compliant_weight: z.number(),
+  active: z.boolean(),
+  created_at: timestampSchema,
+  created_by: uuidSchema.nullable(),
+  deleted_at: timestampSchema.nullable(),
+});
+export type ScoringWeightsRow = z.infer<typeof scoringWeightsRowSchema>;
+
 export const roomSourceSchema = z.enum(["drawing", "manual", "both"]);
 export type RoomSource = z.infer<typeof roomSourceSchema>;
 

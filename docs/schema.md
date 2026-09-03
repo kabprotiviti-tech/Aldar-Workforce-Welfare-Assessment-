@@ -287,6 +287,32 @@ Storage. **A generated report is immutable except for `is_current`**
 (`enforce_report_immutability`, `reports_immutable_except_is_current`):
 every other column is frozen the moment the row is inserted.
 
+### scoring_weights (0032_scoring_weights.sql)
+The Compliant/Partial/Not Compliant weights `lib/rules/aggregate.ts`
+scores against (Not Applicable is always excluded, never weighted).
+Versioned and admin-editable, the exact "at most one active version,
+immutable once referenced, superseded not mutated" pattern as
+`rule_definitions` (`0009_template_immutability.sql`) — a partial
+unique index enforces one active row, and
+`prevent_scoring_weights_mutation` blocks updating/deleting a version
+once any `reports` row references it. Seeded with version 1 (Compliant
+1.0, Partial 0.5, Not Compliant 0) — the platform's default, not a
+confirmed match to the client's own formula (see docs/decisions.md).
+
+### reports.scoring_weights_id (0032_scoring_weights.sql)
+Which `scoring_weights` version produced that report's
+`overall_compliance_pct`/`adjusted_compliance_pct` — stamped by
+`approve_assessment_and_generate_report` at generation time, so "which
+weights produced this percentage" is a permanent stored fact rather
+than something inferred from whatever is active now. The report bucket
+also holds an optional `logo.png` at a well-known path (not a database
+row): `lib/reports/generate-supabase.ts` looks for it there and renders
+without one if absent — see docs/decisions.md, nothing fabricates a
+logo when none has been uploaded. `0033_reports_bucket_pdf.sql` widens
+that bucket's MIME allowlist to `application/pdf` — `0031` had only
+ever allowed `application/json`, from before this bucket held a
+rendered PDF; see docs/decisions.md.
+
 ### The two atomic RPCs
 Both `security definer`, both check `public.is_admin()` themselves
 (the same pattern as `resolve_extracted_fact`) — a Supabase/PostgREST
@@ -692,6 +718,15 @@ just a Storage pointer) and makes every row immutable except
 `is_current` — see "Governance: QA, approval, lock and revision" above.
 Written only by `approve_assessment_and_generate_report`; the file
 itself lives in the `reports` Storage bucket (`0031_reports_bucket.sql`).
+
+### The Excel project tracker (`lib/tracker/`)
+No new table — one row per assessment, read live from `assessments`,
+`assessment_items`, `rfi_requests`, `evidence_files`, and
+`entity_contacts` by `lib/tracker/export-supabase.ts`, then rendered to
+`.xlsx` by `lib/tracker/workbook.ts`. Exists because the RFP requires
+it "written from platform activity, not maintained by hand" — there is
+deliberately no tracker table to fall out of sync with the real data.
+See docs/decisions.md for the date-column-to-source mapping.
 
 ## Request for information (RFI)
 `0014_rfi.sql`. The tokenised-portal tables have no RLS policies at all —

@@ -2026,3 +2026,166 @@ levels that don't need one: the pure logic each action calls
 that are the actual enforcement (`tests/db/governance.test.ts`),
 including a full approve → revise → re-approve cycle proving version
 1's report row is byte-for-byte unchanged after version 2 exists.
+
+## Report deliverables and project tracker
+
+**The scoring weights are configurable now (`0032_scoring_weights.sql`),
+but this does not resolve the open question flagged on day one
+(2026-09-02, "Deterministic compliance rule engine") — it only makes
+that assumption correctable without a code change.** `Compliant = 1.0`,
+`Partial = 0.5`, `Not Compliant = 0`, `Not Applicable` excluded, remain
+this platform's *default*, seeded as version 1. Nothing about making
+them admin-editable and versioned constitutes evidence that they match
+the client's own report tool — half-credit for Partial is still just
+"the common convention in this kind of audit scoring," as the original
+entry said. **Restating explicitly, per this prompt's own instruction:
+do not assume this formula matches the client's existing calculation
+until it has been confirmed against a real client report with known
+inputs and a known output percentage.** The two formulas this platform
+computes — Overall Compliance (%) across every requirement including
+carried-forward items at their inherited rating, and Compliance adjusted
+for not assessed (%) excluding carried-forward items from the
+denominator — are themselves also unconfirmed readings of "adjusted for
+not assessed," not a verified match to the client's tool. Both
+assumptions should be checked in the same pass, against the same
+reference report, before either becomes load-bearing for a real
+engagement.
+
+**An earlier pass on the report header treated Originator, Project Type,
+and Project Name as unavailable; on closer inspection all three are
+backed by real stored data and now appear in `lib/reports/snapshot.ts`.**
+Originator resolves `assessments.created_by` to a name via
+`public.users` (the same "no direct FK PostgREST can embed" gap
+`lib/scheduling/portfolio.ts` already documents for `owner_id`,
+resolved the same way — a second query). Project Type is the module's
+own display label (Employment Practices / Onboarding / Accommodation).
+Project Name is `cycles.name`. Only `Description` remains genuinely
+uncaptured — no free-text field exists anywhere in this schema for
+it — and stays `null` per CONTEXT.md rule 7 rather than being invented.
+
+**Photo bytes are never stored inside `reports.snapshot`, only a
+Storage path reference.** The jsonb snapshot is small, queryable, and
+diffable by design; binary content would bloat every report row and
+buy nothing, since the photo at that Storage path is itself immutable
+(every upload writes to a fresh, timestamped path — nothing overwrites
+one in this codebase). The rendered PDF is the one place bytes and
+reference actually meet: `lib/reports/generate.ts` fetches each
+photo's bytes through `ReportDataSource.photoBytes` immediately before
+rendering, and `lib/reports/pdf.ts` embeds them into the appendix.
+Byte-identical regeneration still holds because the same Storage path
+always yields the same bytes.
+
+**Accommodation reports never get a risk rating; `riskRating` is set to
+`null` for the accommodation module, never computed.** `computeRiskRating`
+(`lib/rules/aggregate.ts`) is defined purely in terms of the 10 numbered
+Employment Practices/Onboarding key requirements
+(`KEY_REQUIREMENT_NUMBERS`). Accommodation's 12 assessment areas are
+numbered `sl_no` 1-12 through the same `requirements` table (one table,
+two names depending on module — see docs/schema.md), and several of
+those numbers (5, 8, 10, 11) coincide with EP/Onboarding's key-requirement
+numbers by pure numeric accident. Calling `computeRiskRating` on
+Accommodation items would silently misclassify an unrelated
+Accommodation area as a "key requirement" and produce a risk rating
+CONTEXT.md never asked for on that module. `lib/reports/generate.ts`
+short-circuits this entirely: accommodation assessments never reach
+`computeRiskRating` at all.
+
+**No client logo is ever drawn or fabricated when none has been
+supplied.** `lib/reports/pdf.ts`'s renderer accepts `logoBytes: Uint8Array
+| null` and draws nothing when it's `null`; `lib/reports/generate-supabase.ts`
+looks for a real uploaded logo at a well-known Storage path
+(`reports` bucket, `logo.png`) and passes through whatever it finds —
+including nothing. Drawing a placeholder or a guessed Aldar mark would
+risk producing something that reads as real branding the platform never
+actually received, which is a safety concern (impersonating an
+organization's mark), not just a data-completeness one — the same
+"never guess to fill a field" principle (CONTEXT.md rule 7) extended to
+a visual asset rather than a text field. Uploading a real logo to that
+path is the intended fix, not a code change.
+
+**Accommodation's "Key Questions" and "Assessment" columns render from
+`assessment_answers`/`questions`, which are architecturally wired up but
+carry no rows for Accommodation today** — no question bank has ever
+been seeded for the 12 accommodation areas (`docs/schema.md`'s note
+under `questions`). Rather than inventing question text (rule 7 again)
+or leaving the columns permanently blank in the renderer,
+`lib/reports/snapshot.ts`'s `AccommodationAreaGroup.keyQuestions` and
+`lib/reports/pdf.ts`'s `drawAccommodationTable` fully support the
+grouped, per-question rendering; with zero rows today, every area
+renders as a "group of one" carrying just its own area-level
+rating/remarks/action — exactly "grouped by area with the area-level
+rating on the first row of each group" degenerating to a single row per
+group. The moment a real question bank is seeded, the fuller rendering
+activates with no code change.
+
+**The Excel tracker's nine RFP-named date columns
+(`lib/tracker/export-supabase.ts`) map to five real, directly-stored
+columns and four documented proxies — never a fabricated date.** Office
+visit date and Completed visit date are `assessments.confirmed_visit_date`
+and `assessments.actual_visit_date` respectively (the agreed date vs.
+what actually happened — two genuinely distinct, directly-stored
+columns, `0012_visit_schedule.sql`). Report QA completion / approval /
+issuance date are `assessments.qa_completed_at` / `approved_at` /
+`issued_at` directly (`0030_governance.sql`). The four that need a
+proxy, because this platform tracks the underlying event but not under
+that exact name:
+- **RFI issue date** — the earliest `rfi_requests.issued_at` for the
+  assessment (an assessment can have more than one RFI; the first one
+  sent is what "issued" means here).
+- **Desktop assessment date** — reuses the same RFI issue date value.
+  This platform has no event distinct from "the request for information
+  went out" that would mark when desktop review started; treating them
+  as the same real timestamp is a documented reuse, not two invented
+  values pretending to be independent.
+- **Completed desktop assessment date** — the latest
+  `evidence_files.uploaded_at` (`document_class = 'rfi_upload'`) for the
+  assessment, and only populated once that assessment's RFI(s) actually
+  reached `status = 'completed'`. This is the real, stored timestamp of
+  the real event (the last portal upload) that triggered completion in
+  `lib/rfi/portal-supabase.ts` — deliberately not `rfi_requests.updated_at`,
+  which nothing in this codebase ever writes on that status transition
+  and would therefore silently freeze at the RFI's insert time rather
+  than reflect completion.
+- **Report completion date** — the latest `assessment_items.decided_at`
+  across the assessment's items, i.e. when the last requirement was
+  actually decided by an assessor (stamped by the
+  `assessment_items_status_requires_assessor` trigger,
+  `0024_assessment_decision.sql`) — the real moment the report's content
+  was finished, distinct from its later QA/approval/issuance.
+
+Contact details on the tracker are the entity's primary contact
+(`entity_contacts.is_primary`), not the RFI's own contact, since a
+tracker row exists even for assessments with no RFI issued yet.
+
+**A real bug found while wiring the PDF into report generation:
+`0031_reports_bucket.sql`'s "reports" Storage bucket allowed only
+`application/json`, left over from when a JSON snapshot was the only
+file planned for that bucket.** `lib/reports/generate-supabase.ts`'s
+`uploadReportFile` uploads the rendered PDF with
+`contentType: "application/pdf"` — against a real Supabase project,
+Storage's own bucket-level MIME allowlist would have silently rejected
+every one of those uploads, a failure this platform's local Postgres
+test harness can never surface (`0031`/`0033` touch `storage.buckets`,
+which only exists in a real Supabase project — deliberately excluded
+from `tests/db/helpers.ts`'s migration list). Fixed by
+`0033_reports_bucket_pdf.sql`, a new migration rather than an edit to
+`0031` in place — `0031` already shipped in an earlier commit, and this
+repo's standing convention (e.g. `0032_scoring_weights.sql`'s RPC
+signature change) is to correct an already-shipped migration with a
+follow-up statement, never rewrite it.
+
+**`lib/tracker/export-supabase.ts` has no DB test that calls it
+directly** — it reads through a real `@supabase/supabase-js` client
+(PostgREST), and this platform's local Postgres test harness has no
+PostgREST layer, the same limitation already accepted for
+`lib/reports/generate-supabase.ts`/`lib/qa/checklist-supabase.ts`.
+`tests/db/tracker.test.ts` instead mirrors that adapter's exact query
+shape and column mapping as raw SQL against the real database, proving
+what a unit test against a mocked client never could: that `is_staff()`
+RLS actually permits the read, and that the real
+`assessment_items_status_requires_assessor` trigger really does stamp
+`decided_at` the way "report completion date" assumes. A second test in
+the same file seeds a full 95-assessment cycle and asserts every row
+comes back, matching the acceptance criterion ("exports for a full
+95-facility cycle in one file") at the data layer; `lib/tracker/
+workbook.test.ts` already proves the same at the spreadsheet layer.

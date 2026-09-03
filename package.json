@@ -18,7 +18,9 @@
     "@anthropic-ai/sdk": "0.123.0",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.113.0",
+    "exceljs": "^4.4.0",
     "next": "16.3.4",
+    "pdfkit": "^0.20.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "read-excel-file": "6.0.1",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "@types/pdfkit": "^0.17.6",
     "@types/pg": "8.23.1",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",

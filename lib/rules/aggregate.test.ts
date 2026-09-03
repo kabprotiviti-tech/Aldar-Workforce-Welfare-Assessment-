@@ -50,6 +50,17 @@ describe("compliancePercentFromRatings", () => {
   it("excludes Not Applicable from both numerator and denominator", () => {
     expect(compliancePercentFromRatings(["Compliant", "Not Applicable", "Not Compliant"])).toBe(50);
   });
+
+  it("uses configurable weights instead of the default 1/0.5/0 when given one", () => {
+    // A stricter scheme: Partial counts for nothing, only full Compliant counts.
+    const strict = { compliant: 1, partial: 0, notCompliant: 0 };
+    expect(compliancePercentFromRatings(["Compliant", "Partial"], strict)).toBe(50);
+  });
+
+  it("Not Applicable stays excluded regardless of the configured weights", () => {
+    const strict = { compliant: 1, partial: 0, notCompliant: 0 };
+    expect(compliancePercentFromRatings(["Compliant", "Not Applicable"], strict)).toBe(100);
+  });
 });
 
 describe("computeOverallCompliancePercent", () => {
@@ -76,6 +87,15 @@ describe("computeComplianceAdjustedForNotAssessedPercent", () => {
       entity({ rating: "Compliant", assessedThisCycle: false }),
     ]);
     expect(percent).toBeNull();
+  });
+
+  it("accepts configured weights the same way computeOverallCompliancePercent does", () => {
+    const strict = { compliant: 1, partial: 0, notCompliant: 0 };
+    const percent = computeComplianceAdjustedForNotAssessedPercent(
+      [entity({ rating: "Compliant", assessedThisCycle: true }), entity({ rating: "Partial", assessedThisCycle: true })],
+      strict,
+    );
+    expect(percent).toBe(50);
   });
 });
 

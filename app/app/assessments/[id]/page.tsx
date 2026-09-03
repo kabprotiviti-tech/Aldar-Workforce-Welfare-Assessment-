@@ -52,7 +52,7 @@ export default async function AssessmentDetailPage({
   const entityName = (assessment.entities as { name: string } | null)?.name;
   const facilityName = (assessment.facilities as { name: string } | null)?.name;
 
-  const [{ data: contacts }, { data: rfiRequests }, { data: itemRows }] = await Promise.all([
+  const [{ data: contacts }, { data: rfiRequests }, { data: itemRows }, { data: currentReport }] = await Promise.all([
     supabase.from("entity_contacts").select("id, name, email").eq("entity_id", assessment.entity_id).is("deleted_at", null),
     supabase
       .from("rfi_requests")
@@ -66,7 +66,16 @@ export default async function AssessmentDetailPage({
       .from("assessment_items")
       .select("compliance_status, previous_compliance_status, was_assessed, requirements(sl_no, title)")
       .eq("assessment_id", id),
+    supabase.from("reports").select("id, version, format, storage_path, generated_at").eq("assessment_id", id).eq("is_current", true).maybeSingle(),
   ]);
+
+  // A signed URL, not a public link — the "reports" bucket has no public
+  // read (0031_reports_bucket.sql), the same reasoning as the evidence
+  // preview's getEvidencePreviewUrl. Generated fresh on every page render,
+  // so a short expiry is fine.
+  const reportDownloadUrl = currentReport
+    ? (await supabase.storage.from("reports").createSignedUrl(currentReport.storage_path as string, 300)).data?.signedUrl ?? null
+    : null;
 
   const cycleDiff = buildCycleDiff(
     (itemRows ?? [])
@@ -178,6 +187,25 @@ export default async function AssessmentDetailPage({
         canQaReview={canQaReview}
         canApprove={canApprove}
       />
+
+      {currentReport && (
+        <Card className="max-w-lg">
+          <p className="text-sm font-medium text-ds-ink">Report</p>
+          <p className="mt-1 text-xs text-ds-ink-2">
+            Version {String(currentReport.version)} &middot; generated {new Date(currentReport.generated_at as string).toLocaleDateString()}
+          </p>
+          {reportDownloadUrl ? (
+            <a
+              href={reportDownloadUrl}
+              className="ds-focus-ring mt-4 inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+            >
+              Download report ({(currentReport.format as string).toUpperCase()})
+            </a>
+          ) : (
+            <p className="mt-4 text-sm text-ds-ink-2">Could not generate a download link.</p>
+          )}
+        </Card>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
