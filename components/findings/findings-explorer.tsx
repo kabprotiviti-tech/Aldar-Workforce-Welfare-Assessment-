@@ -87,14 +87,25 @@ type Filter = "all" | string;
  * staff-visible set is small enough to hold in memory at once. Clicking
  * a row opens the detail drawer (components/findings/finding-detail.tsx).
  */
-export function FindingsExplorer({ findings, events, contacts }: { findings: FindingRow[]; events: FindingEventRow[]; contacts: EntityContactOption[] }) {
+export function FindingsExplorer({
+  findings,
+  events,
+  contacts,
+  initialOpenId = null,
+}: {
+  findings: FindingRow[];
+  events: FindingEventRow[];
+  contacts: EntityContactOption[];
+  /** Drill-down from elsewhere (the executive overview's attention list, the monitoring view) — opens this finding's detail drawer on load, the same row a click would open. */
+  initialOpenId?: string | null;
+}) {
   const [module, setModule] = useState<Filter>("all");
   const [entityId, setEntityId] = useState<Filter>("all");
   const [priority, setPriority] = useState<Filter>("all");
   const [status, setStatus] = useState<Filter>("all");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [repeatOnly, setRepeatOnly] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialOpenId);
 
   const entities = useMemo(() => {
     const byId = new Map<string, string>();

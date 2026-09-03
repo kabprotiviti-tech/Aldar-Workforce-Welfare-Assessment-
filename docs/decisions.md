@@ -2189,3 +2189,109 @@ the same file seeds a full 95-assessment cycle and asserts every row
 comes back, matching the acceptance criterion ("exports for a full
 95-facility cycle in one file") at the data layer; `lib/tracker/
 workbook.test.ts` already proves the same at the spreadsheet layer.
+
+## Executive and operational dashboards
+
+**The 8-stage lifecycle rail reads a derived stage
+(`lib/dashboard/lifecycle.ts`), never `assessments.stage` itself.**
+Before this phase started, a survey confirmed `stage` — scaffolded since
+`0004_assessments.sql`, with exactly this prompt's eight values (plan,
+request, collect, review, assess, report, act, monitor) — is never
+written by any code in this codebase. Reading it directly would show
+every assessment permanently stuck at `'plan'`, which is worse than no
+rail at all. `deriveLifecycleStage` instead classifies each assessment
+from real, separately-stored facts: whether an RFI is open, whether a
+visit is confirmed vs. actually happened, how many requirements are
+decided, and whether the assessment has been issued with open findings
+still attached. Every one of the eight labels is reachable from a real
+signal — including `review`, read narrowly as "a visit is confirmed but
+hasn't happened yet" (the one stored fact this schema captures that
+lines up with `docs/schema.md`'s own description of `review` as
+"desktop document review before an office visit"). **This is a stopgap,
+not a fix**: the honest long-term answer is either to start writing
+`stage` at the real transition points this reasoning already identifies,
+or to drop the unused column — this phase does neither, to avoid
+touching the many already-shipped action files that would need a new
+write path, each carrying its own risk of a regression in code this
+session has already built and tested.
+
+**The attention list's two date-windowed signals use assumed
+thresholds, not a client-stated number.** "At-risk deadlines"
+(`lib/dashboard/signals.ts`) reads as a report due date within 7 days,
+or already past, with no report issued yet. "Expiring certificates"
+reads as a certificate's `valid_to` within 30 days, or already expired.
+Neither number appears anywhere in CONTEXT.md or this prompt; both are
+reasonable defaults in the same spirit as the RFI reminder schedule's
+own already-fixed thresholds, not verified against what the client
+actually wants to be warned about. Both constants
+(`AT_RISK_DEADLINE_WINDOW_DAYS`, `EXPIRING_CERTIFICATE_WINDOW_DAYS`) are
+named and exported specifically so they're easy to find and change once
+that's confirmed, rather than buried inline.
+
+**Every signal states its own underlying query as a plain string, by
+design — this is the literal mechanism behind "no predictive claims"
+(this prompt).** A signal is nothing but a filtered list of rows that
+are true right now; there is no scoring, ranking, or trend fit anywhere
+in `lib/dashboard/signals.ts` or `lib/dashboard/monitoring.ts`. "Action
+ageing" buckets by time since a finding was raised, not time until some
+projected resolution — a real elapsed duration, not a forecast.
+
+**The client_viewer portal is a new view at `/app` itself, not a new
+route, and the shared staff `AppShell`/`Nav` were deliberately left
+untouched.** `app/app/page.tsx` now checks the signed-in user's role
+first: a `client_viewer` gets `components/portal/client-portal.tsx`
+(their own approved reports and open findings, both already scoped by
+the existing `reports_select_client_viewer`/
+`findings_select_client_viewer` RLS policies from
+`0007_findings_reports.sql` — no new policy was needed, since CONTEXT.md
+already asked for exactly this scoping when those policies were
+written); anyone else gets the executive overview. Every other
+`/app/*` page — Cycles, Entities, Monitoring, Settings — still renders
+the full staff shell for a client_viewer who navigates there directly by
+URL; RLS still returns nothing meaningful (the same protection every
+other role-scoped page in this app already relies on), so this is a
+usability gap, not a security one. A full audit rewriting every staff
+page's nav for this one role was judged out of scope for this phase.
+
+**"RFI completed" has no stored timestamp, so the assessment lineage
+view (`lib/dashboard/monitoring-supabase.ts`'s `loadAssessmentLineage`)
+reuses the exact same proxy the Excel tracker already established**:
+the latest `evidence_files.uploaded_at` (`document_class = 'rfi_upload'`)
+against a completed RFI. Reusing rather than inventing a second proxy
+keeps "when did this RFI actually complete" answered the same way
+everywhere in the app.
+
+**Dashboard queries got their first real indexes in this phase**
+(`0034_dashboard_indexes.sql`) — before this, `assessments`,
+`assessment_items`, `findings`, `evidence_files` and `qa_queries` had
+none beyond their primary keys, because every prior read pattern was
+either single-assessment-scoped or small enough not to need one. The
+1.5-second/185-assessment budget is proven by
+`tests/db/dashboard.perf.test.ts` against real Postgres, mirroring
+`lib/dashboard/executive-supabase.ts`/`signals-supabase.ts`'s exact
+query sequence — the same "no PostgREST layer locally" limitation, and
+the same mirroring approach, as `tests/db/tracker.test.ts`. No
+materialized view was added: plain indexed queries clear the budget by
+a wide margin at this scale, so the added operational complexity of a
+materialized view (a refresh schedule, staleness to show or hide) has
+no justification yet. If a future phase needs one, this test is where
+that would first start failing.
+
+**Standing guardrail checklist, re-checked explicitly for this phase**
+(the checklist itself, restated verbatim, appears earlier in this file's
+governing instructions — not reproduced again here): no arithmetic,
+date comparison, or threshold evaluation in this phase is performed by
+a model — every date comparison (lifecycle derivation, signal windows,
+deadline warnings, action ageing) is deterministic TypeScript, the same
+kind of code `lib/rfi/reminders.ts` already does. No model outputs a
+compliance status, rating, or risk level — the lifecycle stage, every
+signal, and every monitoring aggregate are computed from stored facts a
+human already decided. Nothing here calls the Anthropic API, client-side
+or otherwise. No extracted fact is consumed anywhere in this phase — it
+reads assessment/finding/report/evidence rows, never `extracted_facts`.
+Nothing here writes to a locked assessment — every read in this phase is
+exactly that, a read; the one write path (the notification dedupe
+tables) never touches `assessments`/`assessment_items`. No report is
+generated by this phase's own code, so there is nothing new to trace —
+the existing traceability guarantee (`reports.scoring_weights_id`,
+`reports.snapshot`) is unchanged.

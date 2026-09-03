@@ -14,7 +14,8 @@ function oneOf<T>(value: T | T[] | null | undefined): T | null {
  * (components/findings/findings-explorer.tsx), the same shape as the
  * evidence library's three-panel view.
  */
-export default async function FindingsPage() {
+export default async function FindingsPage({ searchParams }: { searchParams: Promise<{ open?: string }> }) {
+  const { open } = await searchParams;
   const supabase = await createSupabaseServerClient();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -113,5 +114,5 @@ export default async function FindingsPage() {
     email: (c.email as string | null) ?? null,
   }));
 
-  return <FindingsExplorer findings={rows} events={events} contacts={contacts} />;
+  return <FindingsExplorer findings={rows} events={events} contacts={contacts} initialOpenId={open ?? null} />;
 }

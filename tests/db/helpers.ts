@@ -57,6 +57,8 @@ const MIGRATION_FILES = [
   "supabase/migrations/0032_scoring_weights.sql",
   // 0033_reports_bucket_pdf.sql is deliberately excluded for the same
   // reason as 0031: it also operates on storage.buckets.
+  "supabase/migrations/0034_dashboard_indexes.sql",
+  "supabase/migrations/0035_notifications.sql",
 ];
 
 /**

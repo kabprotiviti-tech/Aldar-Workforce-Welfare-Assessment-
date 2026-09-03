@@ -163,6 +163,12 @@ export default async function AssessmentDetailPage({
           >
             On-site inspection
           </Link>
+          <Link
+            href={`/app/assessments/${id}/lineage`}
+            className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+          >
+            Lineage
+          </Link>
         </div>
       </div>
 

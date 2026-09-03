@@ -840,3 +840,43 @@ reason, a rejection that also produces facts, a second decision on an
 already-reviewed analysis, and a caller who is not staff. Derived facts
 are written at `accepted` with the assessor as `resolved_by`: they have
 just confirmed the reading against the photograph in front of them.
+
+## Executive and operational dashboards
+`0034_dashboard_indexes.sql`, `0035_notifications.sql`. No new tables
+for the dashboards themselves — `lib/dashboard/` reads
+`assessments`/`assessment_items`/`rfi_requests`/`findings`/
+`evidence_files` that already exist, the same "no dedicated table to
+fall out of sync" reasoning as the Excel tracker. The 8-stage lifecycle
+rail computes its stage rather than reading `assessments.stage` (never
+written by any code — see docs/decisions.md); the two date-windowed
+attention-list signals (at-risk deadlines, expiring certificates) use
+assumed thresholds, also flagged in docs/decisions.md.
+
+### 0034_dashboard_indexes.sql
+The first secondary indexes on `assessments`, `assessment_items`,
+`findings`, `evidence_files` and `qa_queries` — every earlier read
+pattern against these tables was single-assessment-scoped or small
+enough not to need one; the dashboards' portfolio-wide, 185-assessment-
+cycle reads are the first to need them to stay inside their 1.5-second
+budget (`tests/db/dashboard.perf.test.ts`).
+
+### report_deadline_warnings_sent / notification_digests_sent (0035_notifications.sql)
+Dedupe ledgers for the two new notification schedules, the identical
+unique-constraint-as-atomic-guard shape as `rfi_reminders_sent`/
+`finding_escalations_sent`: `report_deadline_warnings_sent` keys on
+`(assessment_id, kind)` for the 3-day/1-day report deadline warnings
+(`lib/notifications/send-deadline-warnings.ts`); `notification_digests_sent`
+keys on `(assessor_id, digest_date)` so the daily digest
+(`lib/notifications/send-digest.ts`) sends at most once per assessor per
+calendar day regardless of how many times the scheduler fires.
+
+### The client_viewer portal
+No new table or policy — `app/app/page.tsx` branches on the signed-in
+user's own `role` (read via the existing `users_select_own` policy,
+`0001_init.sql`) and, for `client_viewer`, renders
+`components/portal/client-portal.tsx` from the exact same
+`reports_select_client_viewer`/`findings_select_client_viewer` reads
+every other client_viewer-facing surface in this app already relies on.
+See docs/decisions.md for what this phase left out of scope (every
+other `/app/*` page still renders the staff shell for this role, RLS
+being the only thing that keeps it empty for them).
