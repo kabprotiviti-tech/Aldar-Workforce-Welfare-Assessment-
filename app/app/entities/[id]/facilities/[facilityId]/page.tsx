@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { updateFacility } from "@/lib/entities/actions";
@@ -31,8 +32,18 @@ export default async function FacilityDetailPage({
 
   return (
     <div className="max-w-lg">
-      <h1 className="text-lg font-semibold text-ds-ink">{facility.name}</h1>
-      <p className="mt-1 text-sm text-ds-ink-2">{facility.facility_code}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold text-ds-ink">{facility.name}</h1>
+          <p className="mt-1 text-sm text-ds-ink-2">{facility.facility_code}</p>
+        </div>
+        <Link
+          href={`/app/facilities/${facility.id}/rooms`}
+          className="ds-focus-ring inline-flex items-center justify-center gap-2 rounded-ds-control border border-ds-line bg-ds-surface px-3.5 py-2 text-sm font-medium text-ds-ink hover:border-ds-accent"
+        >
+          Room measurements
+        </Link>
+      </div>
 
       <StatusBanner error={error} success={success} />
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACM_TOILET_RATIO, R18_CD_CERT, R18_ROOM_AREA, R18_ROOM_HEADCOUNT } from "./accommodation";
+import { ACM_OCCUPANCY_RECONCILED, ACM_TOILET_RATIO, R18_CD_CERT, R18_ROOM_AREA, R18_ROOM_HEADCOUNT } from "./accommodation";
 import type { CompiledRule, RuleInputs } from "../types";
 
 function inputs(overrides: Partial<RuleInputs> = {}): RuleInputs {
@@ -208,5 +208,68 @@ describe("ACM_TOILET_RATIO — sanitary fixtures per resident", () => {
 
     expect(result.outcome).toBe("insufficient_data");
     expect(result.missingKeys).toEqual(["toilets", "showers", "washbasins"]);
+  });
+});
+
+describe("ACM_OCCUPANCY_RECONCILED — on-site count vs the occupancy schedule", () => {
+  it("passes when the two figures agree exactly", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 8, room_occupancy_schedule: 8 } });
+
+    expect(result.outcome).toBe("pass");
+    expect(result.computedExplanation).toBe(
+      "8 residents counted on site; 8 recorded on the occupancy schedule. Figures match exactly. Maximum allowed difference 0. Figures agree.",
+    );
+  });
+
+  it("fails on a one-resident difference at the default zero tolerance — the boundary", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 8, room_occupancy_schedule: 7 } });
+
+    expect(result.outcome).toBe("fail");
+    expect(result.computedExplanation).toBe(
+      "8 residents counted on site; 7 recorded on the occupancy schedule. Difference of 1 resident. Maximum allowed difference 0. Figures do not match.",
+    );
+  });
+
+  it("takes the absolute difference — the schedule being higher fails the same way", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 6, room_occupancy_schedule: 9 } });
+
+    expect(result.outcome).toBe("fail");
+    expect(result.observed.difference).toBe(3);
+  });
+
+  it("passes at exactly the configured tolerance, and fails just beyond it", () => {
+    const atTolerance = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 8, room_occupancy_schedule: 7 } }, { maxAllowedDifference: 1 });
+    expect(atTolerance.outcome).toBe("pass");
+
+    const beyondTolerance = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 8, room_occupancy_schedule: 6 } }, { maxAllowedDifference: 1 });
+    expect(beyondTolerance.outcome).toBe("fail");
+  });
+
+  it("returns insufficient_data naming the missing key when only the physical count exists", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_physical: 8 } });
+
+    expect(result.outcome).toBe("insufficient_data");
+    expect(result.missingKeys).toEqual(["room_occupancy_schedule"]);
+  });
+
+  it("returns insufficient_data naming the missing key when only the schedule figure exists", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { quantitative: { room_occupancy_schedule: 8 } });
+
+    expect(result.outcome).toBe("insufficient_data");
+    expect(result.missingKeys).toEqual(["room_occupancy_physical"]);
+  });
+
+  it("returns insufficient_data naming both when neither exists", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, {});
+
+    expect(result.outcome).toBe("insufficient_data");
+    expect(result.missingKeys).toEqual(["room_occupancy_physical", "room_occupancy_schedule"]);
+  });
+
+  it("never reads a document-wide fact as either figure — this comparison is quantitative-only", () => {
+    const result = run(ACM_OCCUPANCY_RECONCILED, { facts: { occupancy_headcount: 8 }, quantitative: { room_occupancy_physical: 8 } });
+
+    expect(result.outcome).toBe("insufficient_data");
+    expect(result.missingKeys).toEqual(["room_occupancy_schedule"]);
   });
 });

@@ -17,10 +17,14 @@ const EXPECTED_CODES = [
   "R18_ROOM_HEADCOUNT",
   "R19_VEHICLE_REG",
   "ACM_TOILET_RATIO",
+  // Added by the drawing-based room area prompt: reconciles an on-site
+  // occupancy count against the occupancy schedule, rather than trusting
+  // either figure unchecked.
+  "ACM_OCCUPANCY_RECONCILED",
 ];
 
 describe("the v1 rule registry", () => {
-  it("contains exactly the rules this prompt asks for", () => {
+  it("contains exactly the rules the platform has implemented", () => {
     expect(COMPLIANCE_RULES.map((rule) => rule.code).sort()).toEqual([...EXPECTED_CODES].sort());
   });
 
@@ -66,7 +70,7 @@ describe("the v1 rule registry", () => {
 
   it("filters by module", () => {
     expect(rulesForModule("accommodation").map((rule) => rule.code)).toEqual(["ACM_TOILET_RATIO"]);
-    expect(rulesForModule("employment_practices")).toHaveLength(12);
+    expect(rulesForModule("employment_practices")).toHaveLength(13);
     expect(rulesForModule("onboarding")).toEqual([]);
   });
 

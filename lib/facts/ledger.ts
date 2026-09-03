@@ -40,6 +40,8 @@ export interface LedgerFact {
   rejectionReason: string | null;
   bbox: FactBbox | null;
   resolvedAt: string | null;
+  /** Which entry (e.g. room) this fact is about, for a document that lists many of the same kind of thing. Null for a document-wide fact. */
+  groupRef: string | null;
 }
 
 /** Confirmed means a person accepted it or replaced it with their own value. Nothing else is consumable. */
@@ -158,6 +160,7 @@ export interface ExtractedFactRowLike {
   resolved_value_json: unknown;
   bbox: unknown;
   resolved_at: string | Date | null;
+  group_ref: string | null;
 }
 
 function isoDate(value: string | Date): string {
@@ -219,6 +222,7 @@ export function ledgerFactFromRow(row: ExtractedFactRowLike): LedgerFact {
     rejectionReason: row.rejection_reason,
     bbox: bbox.success ? bbox.data : null,
     resolvedAt: row.resolved_at ? (row.resolved_at instanceof Date ? row.resolved_at.toISOString() : row.resolved_at) : null,
+    groupRef: row.group_ref,
   };
 }
 

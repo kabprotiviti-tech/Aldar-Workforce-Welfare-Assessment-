@@ -277,6 +277,17 @@ docs/decisions.md). An edited fact keeps the model's `value_*` columns
 untouched as provenance and stores the human's value in
 `resolved_value_json` as `{"value": ...}`.
 
+`0027_room_area.sql` adds `group_ref`: which entry (a room on a drawing,
+a row on an occupancy schedule) one fact is about, for a document that
+lists many of the same kind of thing. Set once, at extraction time, to
+that entry's own printed label (`lib/ai/prompts/approved_drawing/v2.ts`,
+`lib/ai/prompts/occupancy_schedule/v2.ts`) — an assessor's later edit to
+the fact's *value* never touches it, which is what keeps grouping
+correct after facts about the same room are accepted, edited or
+rejected individually and out of order (`lib/rooms/group-facts.ts`).
+Null (the default for every fact key that existed before this feature)
+means "this fact is about the whole document".
+
 ### fact_ledger_confirmed (view)
 `0021_fact_ledger.sql`. **The only read path for facts.** Nothing
 downstream — rules, findings, reports, dashboards — reads
@@ -363,12 +374,50 @@ explanation of how it got there. Append-only, like `extractions`: a
 re-evaluation is a new row.
 
 ### rooms
-Room-level measurements for an accommodation facility.
+Room-level measurements for an accommodation facility. Facility-scoped
+rather than assessment-scoped — a room's area and occupancy persist
+across cycles the same way the facility itself does.
+
 `computed_m2_per_person` is a **generated column** — the database computes
 it from `measured_area_m2` (or `drawing_area_m2`) and `occupancy_count`,
 the same way every time, because CONTEXT.md rule 2 ("the model never
 performs arithmetic ... a typed rule engine evaluates") applies just as
 much to a human typing numbers into a form as it does to a model.
+`0027_room_area.sql` rebuilds it (dropped and re-added — Postgres has no
+ALTER for a stored generated column's expression) to require
+`area_confirmed_at` and `occupancy_confirmed_at` both being set: this
+prompt's own acceptance criterion, "no m² per person value can exist
+without a confirmed area AND a confirmed occupancy", enforced as a
+property of the column itself rather than of whoever reads it.
+
+`area_confirmed_at`/`area_confirmed_by` and
+`occupancy_confirmed_at`/`occupancy_confirmed_by` are the two
+confirmation gates. `drawing_area_low_confidence` distinguishes "the
+drawing never mentioned this room" from "it did, but the reading was
+too unreliable to propose" — two different reasons the review screen
+falls back to a manual field, the second one this prompt's own
+"degrade honestly" instruction. `occupancy_source`
+(`physical_count`/`schedule`) records which of the two permitted
+sources `occupancy_count` currently is.
+`schedule_occupancy_headcount` is the occupancy schedule's own
+confirmed figure, kept independently of `occupancy_count` so a schedule
+reading can be reconciled against a physical count
+(`ACM_OCCUPANCY_RECONCILED`,
+`lib/rules/compliance/rules/accommodation.ts`) without either
+silently overwriting the other; it is informational until an assessor
+promotes it via `confirm_room_occupancy_from_schedule`.
+
+`resolve_room_area` confirms the proposed `drawing_area_m2` as-is, or
+records an assessor's own measurement — either way stamping the
+confirmation and setting `source` (`drawing`/`manual`/`both`, already
+declared but unwired before this feature) so a report can state where
+an area came from. `propose_room_measurements` is the only thing
+allowed to write `drawing_area_m2`/`schedule_occupancy_headcount`: it
+never overwrites an already-confirmed area, and always refreshes the
+schedule figure, so a stale or since-rejected reading doesn't linger.
+`apply_inspection_mutation`'s `room_count` branch stamps the occupancy
+confirmation itself — an assessor's own physical count needs no further
+review step.
 
 ### photos
 Site photos tied to an assessment and (optionally) a specific
@@ -393,6 +442,13 @@ checklist's own numbering (`R11_WAGE_DATE` -> requirement 11, "Timely
 wage payment"; `ACM_*` -> an Accommodation area). Seeded thresholds
 duplicate the defaults declared in `lib/rules/compliance/rules/`, and
 `tests/db/rule-engine.test.ts` fails if the two ever drift.
+
+`0027_room_area.sql` seeds a 14th rule, `ACM_OCCUPANCY_RECONCILED`, as a
+standalone insert rather than an edit to this migration — a migration
+already applied is never rewritten, the same principle 0009's template
+immutability applies to itself. It compares a room's on-site occupancy
+count against the occupancy schedule and is not itself a statutory
+ratio; see `lib/rules/compliance/rules/accommodation.ts`.
 
 ### rule_evaluations (0022_rule_engine.sql)
 Stamped with everything needed to reproduce a result from the row alone:

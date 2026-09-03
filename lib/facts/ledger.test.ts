@@ -33,6 +33,7 @@ function fact(overrides: Partial<LedgerFact> = {}): LedgerFact {
     rejectionReason: null,
     bbox: null,
     resolvedAt: null,
+    groupRef: null,
     ...overrides,
   };
 }
@@ -189,6 +190,7 @@ function row(overrides: Partial<ExtractedFactRowLike> = {}): ExtractedFactRowLik
     resolved_value_json: null,
     bbox: null,
     resolved_at: null,
+    group_ref: null,
     ...overrides,
   };
 }
@@ -260,6 +262,7 @@ describe("ledgerFactFromRow", () => {
       rejectionReason: null,
       bbox: null,
       resolvedAt: null,
+      groupRef: null,
     });
   });
 

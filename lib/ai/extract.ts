@@ -48,6 +48,7 @@ export interface FactInsert {
   verbatimQuote: string | null;
   confidence: "high" | "medium" | "low";
   reason: "not_present" | "illegible" | null;
+  groupRef: string | null;
 }
 
 export interface InsertExtractionInput {
@@ -106,6 +107,7 @@ export function factToInsert(fact: ExtractedFact): FactInsert {
     verbatimQuote: fact.verbatim_quote,
     confidence: fact.confidence,
     reason: fact.reason,
+    groupRef: fact.group_ref ?? null,
     valueText: null,
     valueNumber: null,
     valueDate: null,

@@ -53,6 +53,7 @@ export function supabaseExtractionDb(supabase: SupabaseClient = createSupabaseAd
             verbatim_quote: fact.verbatimQuote,
             confidence: fact.confidence,
             reason: fact.reason,
+            group_ref: fact.groupRef,
             status: "proposed",
           })),
         )

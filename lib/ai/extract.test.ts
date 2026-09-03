@@ -273,4 +273,12 @@ describe("factToInsert", () => {
     expect(insert.valueJson).toBeNull();
     expect(insert.reason).toBe("not_present");
   });
+
+  it("carries group_ref through for a document that correlates facts by entry", () => {
+    expect(factToInsert({ ...base, value: 26.4, group_ref: "204" }).groupRef).toBe("204");
+  });
+
+  it("defaults group_ref to null for a document-wide fact that never sets it", () => {
+    expect(factToInsert({ ...base, value: 26.4 }).groupRef).toBeNull();
+  });
 });

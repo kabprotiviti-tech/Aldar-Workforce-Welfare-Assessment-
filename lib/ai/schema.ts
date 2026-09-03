@@ -29,6 +29,17 @@ export function extractedFactSchema<K extends readonly [string, ...string[]]>(fa
       confidence: factConfidenceSchema,
       /** This prompt: {"value": null, "reason": "not_present" | "illegible"} when a fact can't be read off the document. */
       reason: factAbsenceReasonSchema.nullable(),
+      /**
+       * Which entry this fact is about, for a document that lists many
+       * of the same kind of thing — a room on a drawing, a row on an
+       * occupancy schedule. Optional so every existing prompt keeps
+       * working unchanged; only a per-class prompt that actually asks
+       * for it (lib/ai/prompts/approved_drawing/v2.ts,
+       * lib/ai/prompts/occupancy_schedule/v2.ts) will ever see one.
+       * Never set by an assessor's later edit — see
+       * lib/rooms/group-facts.ts.
+       */
+      group_ref: z.string().min(1).nullable().optional(),
     })
     .refine((fact) => (fact.value === null) === (fact.reason !== null), {
       message: "reason must be set exactly when value is null",

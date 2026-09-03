@@ -134,6 +134,8 @@ export const extractedFactRowSchema = z.object({
   /** 0021_fact_ledger.sql — why an assessor rejected this fact. Distinct from `reason`, which is the model explaining an absence. */
   rejection_reason: z.string().nullable(),
   bbox: z.unknown().nullable(),
+  /** Which entry (e.g. room on a drawing) this fact is about — see lib/rooms/group-facts.ts. Null for a document-wide fact. */
+  group_ref: z.string().nullable(),
   created_at: timestampSchema,
   updated_at: timestampSchema,
 });
@@ -148,10 +150,13 @@ export type ExtractedFactRow = z.infer<typeof extractedFactRowSchema>;
  */
 export const factLedgerConfirmedRowSchema = z.object({
   id: uuidSchema,
-  extraction_id: uuidSchema,
-  evidence_file_id: uuidSchema,
+  extraction_id: uuidSchema.nullable(),
+  evidence_file_id: uuidSchema.nullable(),
+  photo_analysis_id: uuidSchema.nullable(),
+  photo_id: uuidSchema.nullable(),
   assessment_id: uuidSchema,
   fact_key: z.string(),
+  group_ref: z.string().nullable(),
   confirmed_value: z.unknown().nullable(),
   unit: z.string().nullable(),
   page_ref: z.string().nullable(),

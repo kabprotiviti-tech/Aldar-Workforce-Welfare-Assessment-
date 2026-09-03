@@ -19,7 +19,7 @@ import type { FactLedgerDb } from "@/lib/facts/resolve";
  * RLS is doing the authorization here.
  */
 const FACT_COLUMNS =
-  "id, evidence_file_id, fact_key, value_text, value_number, value_date, value_boolean, value_json, unit, page_ref, verbatim_quote, confidence, status, reason, rejection_reason, resolved_value_json, bbox, resolved_at";
+  "id, evidence_file_id, fact_key, value_text, value_number, value_date, value_boolean, value_json, unit, page_ref, verbatim_quote, confidence, status, reason, rejection_reason, resolved_value_json, bbox, resolved_at, group_ref";
 
 export function supabaseFactLedgerDb(supabase: SupabaseClient): FactLedgerDb {
   return {

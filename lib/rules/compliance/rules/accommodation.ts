@@ -257,3 +257,72 @@ export const ACM_TOILET_RATIO = defineRule({
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// ACM_OCCUPANCY_RECONCILED — on-site headcount vs the occupancy schedule
+// ---------------------------------------------------------------------------
+
+const occupancyReconciledThresholds = z.object({
+  /** How many occupants the two counts may differ by and still be treated as agreeing. */
+  maxAllowedDifference: z.number().int().min(0),
+});
+
+const OCCUPANCY_RECONCILED_TEMPLATE =
+  "{physical} residents counted on site; {schedule} recorded on the occupancy schedule. {difference}. Maximum allowed difference {maxDifference}. {verdict}.";
+
+/**
+ * Not a legal ratio — a reconciliation between two ways this platform
+ * learns a room's occupancy (this prompt: "the two are compared. A
+ * mismatch... is itself raised as an observation"). CONTEXT.md rule 2
+ * makes comparing two numbers exactly the code's job rather than a
+ * model's, whether or not the comparison tests a statutory threshold —
+ * so it is a rule like any other, computed the same way and producing
+ * the same observation once run.
+ *
+ * Both figures arrive as quantitative inputs, already resolved by
+ * lib/rules/compliance's room-subject adapter from the rooms table
+ * (physical: an assessor's own on-site count; schedule: a fact the
+ * assessor separately confirmed against an occupancy schedule) — this
+ * rule reads neither source directly, so a numeric disagreement is the
+ * only thing it can possibly detect.
+ */
+export const ACM_OCCUPANCY_RECONCILED = defineRule({
+  code: "ACM_OCCUPANCY_RECONCILED",
+  title: "On-site occupancy count matches the occupancy schedule",
+  module: "employment_practices",
+  requirementSlNo: 18,
+  inputFactKeys: [],
+  quantitativeKeys: ["room_occupancy_physical", "room_occupancy_schedule"],
+  defaultThresholds: { maxAllowedDifference: 0 },
+  thresholdsSchema: occupancyReconciledThresholds,
+  legalReference:
+    "WWAP checklist requirement 18 (Decent accommodation and food). Data-reconciliation check between two recorded occupancy figures, not itself a statutory ratio.",
+  explanationTemplate: OCCUPANCY_RECONCILED_TEMPLATE,
+  evaluate(inputs, thresholds) {
+    const physical = optional(inputs, quant("room_occupancy_physical", asInteger));
+    const schedule = optional(inputs, quant("room_occupancy_schedule", asInteger));
+
+    const missing: string[] = [];
+    if (physical === null) missing.push("room_occupancy_physical");
+    if (schedule === null) missing.push("room_occupancy_schedule");
+    if (missing.length > 0) {
+      return insufficientData(missing, "Nothing to reconcile without both an on-site count and an occupancy schedule figure for this room.");
+    }
+
+    const difference = Math.abs(physical! - schedule!);
+    const agrees = difference <= thresholds.maxAllowedDifference;
+
+    return {
+      outcome: agrees ? "pass" : "fail",
+      computedExplanation: renderTemplate(OCCUPANCY_RECONCILED_TEMPLATE, {
+        physical: physical!,
+        schedule: schedule!,
+        difference: difference === 0 ? "Figures match exactly" : `Difference of ${pluralize(difference, "resident")}`,
+        maxDifference: thresholds.maxAllowedDifference,
+        verdict: agrees ? "Figures agree" : "Figures do not match",
+      }),
+      missingKeys: [],
+      observed: { physical, schedule, difference, maxAllowedDifference: thresholds.maxAllowedDifference },
+    };
+  },
+});

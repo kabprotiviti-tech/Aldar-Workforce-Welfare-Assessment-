@@ -8,8 +8,8 @@ import * as passportRegister from "@/lib/ai/prompts/passport_register/v1";
 import * as insuranceSchedule from "@/lib/ai/prompts/insurance_schedule/v1";
 import * as accommodationContract from "@/lib/ai/prompts/accommodation_contract/v1";
 import * as civilDefenceCertificate from "@/lib/ai/prompts/civil_defence_certificate/v1";
-import * as occupancySchedule from "@/lib/ai/prompts/occupancy_schedule/v1";
-import * as approvedDrawing from "@/lib/ai/prompts/approved_drawing/v1";
+import * as occupancySchedule from "@/lib/ai/prompts/occupancy_schedule/v2";
+import * as approvedDrawing from "@/lib/ai/prompts/approved_drawing/v2";
 import * as vehicleRegistration from "@/lib/ai/prompts/vehicle_registration/v1";
 import * as inductionRegister from "@/lib/ai/prompts/induction_register/v1";
 

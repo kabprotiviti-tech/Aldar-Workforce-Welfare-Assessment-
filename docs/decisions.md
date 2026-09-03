@@ -1616,3 +1616,113 @@ an area field, smuggle a measurement into free text, add a status key,
 and repeat a field; the database half is proven against real Postgres.
 The gap that remains is the model's own behaviour on a real image, which
 is exactly why none of the guarantees above depend on it.
+
+## Drawing-based room area
+
+**The hard separation is a hard separation of components, not just of
+prompt instructions.** The model reports a printed area value with its
+own unit, or a printed dimension pair with its own unit — never both
+combined, never converted. `lib/rooms/units.ts` and
+`lib/rooms/area-calc.ts` do every conversion and every multiplication,
+in code, with their own tests. A model that tried to report a computed
+area would have nowhere to put it: `drawing_room_area_value` is defined
+as "exactly as printed", and the fact key for a computed figure does not
+exist.
+
+**A printed area value is preferred over printed dimensions, and the two
+are never cross-checked.** If a drawing prints both, using the area
+value is what the drawing itself states as the room's size; comparing it
+against the dimension product would be exactly the kind of arithmetic
+this module doesn't do. A mismatch between a room's printed area and its
+printed dimensions is left for whoever reviews the drawing to notice.
+
+**Correlating a drawing's six facts per room needed a real primitive, not
+the "same array order" convention the original fact-key design implied.**
+Facts are resolved individually through the ledger — accepted, edited or
+rejected out of order — so matching "the i-th `drawing_room_ref`" to
+"the i-th `drawing_room_area_value`" would silently misalign the moment
+any one fact for any one room was resolved differently from the rest.
+`group_ref`, set once at extraction time to the room's own printed label
+and never touched by an edit to a fact's value, replaces positional
+order with an actual join key. It is added to the *generic* extraction
+schema (`lib/ai/schema.ts`), not bolted onto these two document classes
+alone, because any document that lists many of the same kind of thing —
+a payroll register's rows, a passport register's rows — has the same
+correlation problem; those classes simply never set it, and the field is
+optional so every existing v1 prompt keeps working unchanged.
+
+**A room-level confirmation is a second gate, deliberately distinct from
+ledger confirmation.** Accepting the six raw facts through the fact
+ledger confirms that each printed value was read correctly; it says
+nothing about whether the *computed* area — a unit conversion, or a
+multiplication of two numbers — is one an assessor is willing to stand
+behind. `rooms.area_confirmed_at` is that second, explicit gate, set only
+by `resolve_room_area`. The same reasoning as fact ledger confirmation
+one level up: a value being technically correct and a person having
+looked at it are different facts, and only the second one may reach a
+rule.
+
+**Occupancy did not need the same second gate.** A physical, on-site
+count is itself an assessor's own act — requiring them to confirm their
+own count a second time would be ceremony, not a control, so
+`apply_inspection_mutation`'s `room_count` branch stamps
+`occupancy_confirmed_at` when it writes the count. A schedule-derived
+occupancy is different (it is a model's reading of a document) and does
+get an explicit promotion step, `confirm_room_occupancy_from_schedule`.
+
+**The reconciliation is a rule, not a bespoke observation.** Comparing an
+on-site count against a schedule figure is arithmetic — CONTEXT.md rule
+2 makes that code's job regardless of whether the comparison tests a
+legal threshold. Modelling it as `ACM_OCCUPANCY_RECONCILED` means it
+gets the same stored-evaluation, stamped-threshold, displayed-working
+treatment as every other rule for free, rather than a second code path
+for "reconciliation findings" that would have to reinvent all of that.
+
+**`insufficient_data` when only one occupancy source exists is a genuine
+simplification.** Most rooms will have exactly one of a physical count or
+a schedule figure, which isn't really "insufficient data" so much as
+"nothing to reconcile yet" — but `RuleOutcome` is a closed
+pass/fail/insufficient_data union, and widening it for one rule would
+ripple through every consumer of that type. `insufficient_data` is the
+closest existing meaning and is what's used; it is a judgement call
+worth naming rather than a "not applicable" fourth state, which this rule
+alone would need.
+
+**`propose_room_measurements` is the only writer of the proposed columns,
+and it enforces "never overwrite a confirmed value" itself.** The
+alternative — every caller checking `area_confirmed_at is null` before
+writing — is exactly the kind of invariant that survives until someone
+adds a second caller. `schedule_occupancy_headcount` is the one field
+always overwritten, confirmed or not: it is informational until
+explicitly promoted, so a stale or since-rejected schedule reading must
+not linger after a re-run.
+
+**Room evaluation runs against the facility's employment-practices
+assessment, not an accommodation-module one.** `R18_ROOM_AREA` and
+`R18_ROOM_HEADCOUNT` are declared under `module: "employment_practices"`
+because that is the checklist template requirement 18 ("Decent
+accommodation and food") belongs to — a rule's `module` names which
+checklist owns its requirement, not which assessment module the figures
+were captured under. `evaluateRoomRules` (`lib/rooms/actions.ts`) finds
+that facility's most recent employment-practices assessment and its
+requirement-18 item, the same target `R18_CD_CERT` already evaluates
+against.
+
+**"The report shows the source" is shown on the rooms review screen, not
+a generated report document.** No report-generation code exists yet in
+this codebase (`reports` is a table with nothing that populates it) —
+the source label (drawing/measured on site/both, `rooms.source`) is
+wired and displayed wherever a room's area is currently readable, which
+is this screen. Whatever eventually generates a report reads the same
+column.
+
+**What was not tested: a real drawing through a real model, and a live
+"propose" call through Supabase.** No Anthropic call or Supabase client
+exists in this sandbox. The unit conversion, the area arithmetic, the
+grouping, and the proposal computation are proven in isolation; the
+database half — confirmation gating, the generated column, both RPCs,
+and rule evaluation reading real confirmed rows — is proven against real
+Postgres, driving the pure functions with rows read from it. The gap is
+the two adapters that call `supabase.rpc(...)` from a real session,
+which is exactly why neither adapter carries any logic beyond the call
+itself.

@@ -18,6 +18,7 @@ function ledgerFact(overrides: Partial<LedgerFact> = {}): LedgerFact {
     rejectionReason: null,
     bbox: null,
     resolvedAt: null,
+    groupRef: null,
     ...overrides,
   };
 }
